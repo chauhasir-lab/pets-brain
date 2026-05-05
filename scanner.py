@@ -16,25 +16,23 @@ WATCHLIST = [
 
 KILL_SWITCH = {"losses": 0, "active": True}
 
+
 def save_signal(signal):
     conn = get_connection()
     if not conn:
         return
     try:
         cursor = conn.cursor()
-        cursor.execute("""
-            INSERT INTO signals 
-            (symbol, action, entry_price, stop_loss, target, confidence, reason)
-            VALUES (%s, %s, %s, %s, %s, %s, %s)
-        """, (
-            signal['symbol'], "BUY", signal['entry'],
-            signal['sl'], signal['target'], signal['score'], signal['reasons']
-        ))
+        cursor.execute(
+            "INSERT INTO signals (symbol, action, entry_price, stop_loss, target, confidence, reason) VALUES (%s, %s, %s, %s, %s, %s, %s)",
+            (signal['symbol'], "BUY", signal['entry'], signal['sl'], signal['target'], signal['score'], signal['reasons'])
+        )
         conn.commit()
         cursor.close()
         conn.close()
     except Exception as e:
         logger.error(f"Save signal error: {e}")
+
 
 def get_dummy_data(symbol):
     np.random.seed(42)
@@ -49,6 +47,7 @@ def get_dummy_data(symbol):
     }, index=dates)
     return df
 
+
 def run_scanner():
     if not KILL_SWITCH["active"]:
         logger.warning("Kill switch active. Scanner paused.")
@@ -61,11 +60,10 @@ def run_scanner():
             if result and result['score'] >= 80:
                 logger.info(f"Signal found: {symbol} | Score: {result['score']}")
                 save_signal(result)
-                send_alert(
-                    symbol=result['symbol'],
-                    action="BUY",
-                    entry=result['entry'],
-                    sl=result['sl'],
-                    target=result['target'],
-                    confidence=result['score'],
-                    reason=result['reasons']
+                send_alert(symbol=result['symbol'], action="BUY", entry=result['entry'], sl=result['sl'], target=result['target'], confidence=result['score'], reason=result['reasons'])
+        except Exception as e:
+            logger.error(f"Scanner error for {symbol}: {e}")
+
+
+def send_test_alert():
+    send_alert(symbol="TEST", action="BUY", entry=100, sl=95, target=110, confidence=85, reason="PETS System Test")
