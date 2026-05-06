@@ -13,13 +13,7 @@ def calculate_ema(df, period):
     return df
 
 def calculate_atr(df, period=14):
-    df['tr'] = np.maximum(
-        df['high'] - df['low'],
-        np.maximum(
-            abs(df['high'] - df['close'].shift(1)),
-            abs(df['low'] - df['close'].shift(1))
-        )
-    )
+    df['tr'] = np.maximum(df['high'] - df['low'], np.maximum(abs(df['high'] - df['close'].shift(1)), abs(df['low'] - df['close'].shift(1))))
     df['atr'] = df['tr'].rolling(window=period).mean()
     return df
 
@@ -34,7 +28,7 @@ def calculate_rsi(df, period=14):
 def check_volume_spike(df):
     avg_volume = df['volume'].rolling(window=10).mean()
     latest_volume = df['volume'].iloc[-1]
-    return latest_volume > (avg_volume.iloc[-1] * 2)
+    return latest_volume > (avg_volume.iloc[-1] * 1.5)
 
 def analyze_setup(df, symbol):
     try:
@@ -50,49 +44,40 @@ def analyze_setup(df, symbol):
         score = 0
         reasons = []
 
-        # VWAP Reclaim
         if prev['close'] < prev['vwap'] and latest['close'] > latest['vwap']:
             score += 30
             reasons.append("VWAP Reclaim")
 
-        # EMA trend
         if latest['close'] > latest['ema_20'] > latest['ema_50']:
             score += 20
             reasons.append("EMA Bullish")
 
-        # Volume spike
         if check_volume_spike(df):
             score += 25
             reasons.append("Volume Spike")
 
-        # RSI momentum
         if 50 < latest['rsi'] < 70:
             score += 15
             reasons.append("RSI Momentum")
 
-        # ATR based SL and Target
         atr = latest['atr']
         entry = latest['close']
         sl = round(entry - (1.5 * atr), 2)
         target = round(entry + (3 * atr), 2)
         rr = round((target - entry) / (entry - sl), 2)
 
-        # RR check
         if rr >= 2:
             score += 10
             reasons.append(f"RR {rr}")
+        elif rr >= 1.5:
+            score += 0
+            reasons.append(f"RR {rr}")
         else:
-            score -= 20
+            score -= 10
 
-        return {
-            "symbol": symbol,
-            "score": score,
-            "entry": entry,
-            "sl": sl,
-            "target": target,
-            "rr": rr,
-            "reasons": ", ".join(reasons)
-        }
+        logger.info(f"Symbol: {symbol} | Score: {score} | Reasons: {', '.join(reasons)}")
+
+        return {"symbol": symbol, "score": score, "entry": entry, "sl": sl, "target": target, "rr": rr, "reasons": ", ".join(reasons)}
 
     except Exception as e:
         logger.error(f"Strategy error for {symbol}: {e}")
