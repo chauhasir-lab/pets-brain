@@ -5,6 +5,7 @@ import threading
 from database import create_tables
 from scanner import run_scanner
 from bot_handler import start_bot_listener
+from token_manager import refresh_fyers_token
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -17,6 +18,7 @@ def main():
     bot_thread.start()
     
     schedule.every(1).minutes.do(run_scanner)
+    schedule.every().day.at("08:00").do(refresh_fyers_token)
     
     while True:
         schedule.run_pending()
