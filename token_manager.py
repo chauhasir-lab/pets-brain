@@ -1,1 +1,139 @@
+import os
+
+import logging
+
+import requests
+
+
+
+logger = logging.getLogger(__name__)
+
+
+
+def refresh_fyers_token():
+
+    try:
+
+        from fyers_apiv3 import fyersModel
+
+        
+
+        session = fyersModel.SessionModel(
+
+            client_id=os.environ.get("FYERS_APP_ID"),
+
+            secret_key=os.environ.get("FYERS_SECRET_KEY"),
+
+            redirect_uri="https://127.0.0.1",
+
+            response_type="code",
+
+            grant_type="refresh_token"
+
+        )
+
+        
+
+        session.set_token(os.environ.get("FYERS_REFRESH_TOKEN"))
+
+        response = session.generate_token()
+
+        
+
+        if response.get('code') == 200:
+
+            new_token = response['access_token']
+
+            update_railway_token(new_token)
+
+            logger.info("Token refreshed successfully.")
+
+            return new_token
+
+        else:
+
+            logger.error(f"Token refresh failed: {response}")
+
+            return None
+
+            
+
+    except Exception as e:
+
+        logger.error(f"Token refresh error: {e}")
+
+        return None
+
+
+
+def update_railway_token(new_token):
+
+    try:
+
+        railway_token = os.environ.get("RAILWAY_API_TOKEN")
+
+        service_id = os.environ.get("RAILWAY_SERVICE_ID")
+
+        environment_id = os.environ.get("RAILWAY_ENVIRONMENT_ID")
+
+        
+
+        if not railway_token:
+
+            logger.warning("Railway API token not set.")
+
+            return
+
+            
+
+        headers = {
+
+            "Authorization": f"Bearer {railway_token}",
+
+            "Content-Type": "application/json"
+
+        }
+
+        
+
+        mutation = """
+
+        mutation {
+
+            variableUpsert(input: {
+
+                serviceId: "%s",
+
+                environmentId: "%s", 
+
+                name: "FYERS_ACCESS_TOKEN",
+
+                value: "%s"
+
+            })
+
+        }
+
+        """ % (service_id, environment_id, new_token)
+
+        
+
+        requests.post(
+
+            "https://backboard.railway.app/graphql/v2",
+
+            json={"query": mutation},
+
+            headers=headers
+
+        )
+
+        logger.info("Railway token updated.")
+
+        
+
+    except Exception as e:
+
+        logger.error(f"Railway update error: {e}")
+
 
