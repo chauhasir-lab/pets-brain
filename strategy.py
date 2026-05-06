@@ -30,6 +30,11 @@ def check_volume_spike(df):
     latest_volume = df['volume'].iloc[-1]
     return latest_volume > (avg_volume.iloc[-1] * 1.5)
 
+def calculate_trailing_sl(entry, atr, current_price):
+    trail_distance = 1.5 * atr
+    trailing_sl = round(current_price - trail_distance, 2)
+    return max(trailing_sl, round(entry - trail_distance, 2))
+
 def analyze_setup(df, symbol):
     try:
         df = calculate_vwap(df)
@@ -65,6 +70,7 @@ def analyze_setup(df, symbol):
         sl = round(entry - (1.5 * atr), 2)
         target = round(entry + (3 * atr), 2)
         rr = round((target - entry) / (entry - sl), 2)
+        trailing_sl = calculate_trailing_sl(entry, atr, entry)
 
         if rr >= 2:
             score += 10
@@ -77,7 +83,16 @@ def analyze_setup(df, symbol):
 
         logger.info(f"Symbol: {symbol} | Score: {score} | Reasons: {', '.join(reasons)}")
 
-        return {"symbol": symbol, "score": score, "entry": entry, "sl": sl, "target": target, "rr": rr, "reasons": ", ".join(reasons)}
+        return {
+            "symbol": symbol,
+            "score": score,
+            "entry": entry,
+            "sl": sl,
+            "trailing_sl": trailing_sl,
+            "target": target,
+            "rr": rr,
+            "reasons": ", ".join(reasons)
+        }
 
     except Exception as e:
         logger.error(f"Strategy error for {symbol}: {e}")
