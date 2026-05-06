@@ -1,86 +1,84 @@
 import pandas as pd
 import numpy as np
 import logging
-import os
-from strategy import analyze_setup
-from telegram_alert import send_alert
-from database import get_connection
 
 logger = logging.getLogger(__name__)
 
-WATCHLIST = [
-    "RELIANCE", "TCS", "HDFCBANK", "INFY", "ICICIBANK",
-    "HINDUNILVR", "ITC", "SBIN", "BHARTIARTL", "KOTAKBANK",
-    "LT", "AXISBANK", "ASIANPAINT", "MARUTI", "TITAN",
-    "SUNPHARMA", "ULTRACEMCO", "WIPRO", "NESTLEIND", "TECHM"
-]
-
-KILL_SWITCH = {"losses": 0, "active": True}
-
-
-def get_dummy_data(symbol):
-    np.random.seed(42)
-    dates = pd.date_range(end=pd.Timestamp.now(), periods=50, freq='5min')
-    close = np.random.uniform(100, 500, 50).cumsum()
-    df = pd.DataFrame({
-        'open': close * np.random.uniform(0.99, 1.01, 50),
-        'high': close * np.random.uniform(1.00, 1.02, 50),
-        'low': close * np.random.uniform(0.98, 1.00, 50),
-        'close': close,
-        'volume': np.random.randint(100000, 500000, 50)
-    }, index=dates)
+def calculate_vwap(df):
+    df['vwap'] = (df['volume'] * (df['high'] + df['low'] + df['close']) / 3).cumsum() / df['volume'].cumsum()
     return df
 
+def calculate_ema(df, period):
+    df[f'ema_{period}'] = df['close'].ewm(span=period, adjust=False).mean()
+    return df
 
-def get_live_data(symbol):
+def calculate_atr(df, period=14):
+    df['tr'] = np.maximum(df['high'] - df['low'], np.maximum(abs(df['high'] - df['close'].shift(1)), abs(df['low'] - df['close'].shift(1))))
+    df['atr'] = df['tr'].rolling(window=period).mean()
+    return df
+
+def calculate_rsi(df, period=14):
+    delta = df['close'].diff()
+    gain = delta.where(delta > 0, 0).rolling(window=period).mean()
+    loss = (-delta.where(delta < 0, 0)).rolling(window=period).mean()
+    rs = gain / loss
+    df['rsi'] = 100 - (100 / (1 + rs))
+    return df
+
+def check_volume_spike(df):
+    avg_volume = df['volume'].rolling(window=10).mean()
+    latest_volume = df['volume'].iloc[-1]
+    return latest_volume > (avg_volume.iloc[-1] * 1.5)
+
+def analyze_setup(df, symbol):
     try:
-        from fyers_apiv3 import fyersModel
-        fyers = fyersModel.FyersModel(client_id=os.environ.get("FYERS_APP_ID"), token=os.environ.get("FYERS_ACCESS_TOKEN"), log_path="")
-        data = {"symbol": f"NSE:{symbol}-EQ", "resolution": "5", "date_format": "1", "range_from": "2024-01-01", "range_to": "2024-12-31", "cont_flag": "1"}
-        response = fyers.history(data=data)
-        if response['code'] == 200:
-            candles = response['candles']
-            df = pd.DataFrame(candles, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
-            df['timestamp'] = pd.to_datetime(df['timestamp'], unit='s')
-            df.set_index('timestamp', inplace=True)
-            return df
+        df = calculate_vwap(df)
+        df = calculate_ema(df, 20)
+        df = calculate_ema(df, 50)
+        df = calculate_atr(df)
+        df = calculate_rsi(df)
+
+        latest = df.iloc[-1]
+        prev = df.iloc[-2]
+
+        score = 0
+        reasons = []
+
+        if prev['close'] < prev['vwap'] and latest['close'] > latest['vwap']:
+            score += 30
+            reasons.append("VWAP Reclaim")
+
+        if latest['close'] > latest['ema_20'] > latest['ema_50']:
+            score += 20
+            reasons.append("EMA Bullish")
+
+        if check_volume_spike(df):
+            score += 25
+            reasons.append("Volume Spike")
+
+        if 50 < latest['rsi'] < 70:
+            score += 15
+            reasons.append("RSI Momentum")
+
+        atr = latest['atr']
+        entry = latest['close']
+        sl = round(entry - (1.5 * atr), 2)
+        target = round(entry + (3 * atr), 2)
+        rr = round((target - entry) / (entry - sl), 2)
+
+        if rr >= 2:
+            score += 10
+            reasons.append(f"RR {rr}")
+        elif rr >= 1.5:
+            score += 0
+            reasons.append(f"RR {rr}")
         else:
-            return get_dummy_data(symbol)
+            score -= 10
+
+        logger.info(f"Symbol: {symbol} | Score: {score} | Reasons: {', '.join(reasons)}")
+
+        return {"symbol": symbol, "score": score, "entry": entry, "sl": sl, "target": target, "rr": rr, "reasons": ", ".join(reasons)}
+
     except Exception as e:
-        logger.error(f"Fyers data error: {e}")
-        return get_dummy_data(symbol)
-
-
-def save_signal(signal):
-    conn = get_connection()
-    if not conn:
-        return
-    try:
-        cursor = conn.cursor()
-        cursor.execute("INSERT INTO signals (symbol, action, entry_price, stop_loss, target, confidence, reason) VALUES (%s, %s, %s, %s, %s, %s, %s)", (signal['symbol'], "BUY", signal['entry'], signal['sl'], signal['target'], signal['score'], signal['reasons']))
-        conn.commit()
-        cursor.close()
-        conn.close()
-    except Exception as e:
-        logger.error(f"Save signal error: {e}")
-
-
-def run_scanner():
-    if not KILL_SWITCH["active"]:
-        logger.warning("Kill switch active. Scanner paused.")
-        return
-    logger.info("Scanning market...")
-    for symbol in WATCHLIST:
-        try:
-            df = get_live_data(symbol)
-            result = analyze_setup(df, symbol)
-            if result and result['score'] >= 60:
-                logger.info(f"Signal found: {symbol} | Score: {result['score']}")
-                save_signal(result)
-                send_alert(symbol=result['symbol'], action="BUY", entry=result['entry'], sl=result['sl'], target=result['target'], confidence=result['score'], reason=result['reasons'])
-        except Exception as e:
-            logger.error(f"Scanner error for {symbol}: {e}")
-
-
-def send_test_alert():
-    send_alert(symbol="TEST", action="BUY", entry=100, sl=95, target=110, confidence=85, reason="PETS System Test")
+        logger.error(f"Strategy error for {symbol}: {e}")
+        return None
