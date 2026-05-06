@@ -17,7 +17,7 @@ def main():
     bot_thread = threading.Thread(target=start_bot_listener, daemon=True)
     bot_thread.start()
     
-    schedule.every(1).minutes.do(run_scanner)
+    schedule.every(30).seconds.do(run_scanner)
     schedule.every().day.at("08:00").do(refresh_fyers_token)
     
     while True:
