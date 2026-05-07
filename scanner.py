@@ -3,6 +3,7 @@ import numpy as np
 import logging
 import os
 import time
+from datetime import datetime, timedelta
 from strategy import analyze_setup
 from telegram_alert import send_alert
 from database import get_connection
@@ -53,19 +54,41 @@ def get_dummy_data(symbol):
 def get_live_data(symbol):
     try:
         from fyers_apiv3 import fyersModel
-        fyers = fyersModel.FyersModel(client_id=os.environ.get("FYERS_APP_ID"), token=os.environ.get("FYERS_ACCESS_TOKEN"), log_path="")
-        data = {"symbol": f"NSE:{symbol}-EQ", "resolution": "5", "date_format": "1", "range_from": "2024-01-01", "range_to": "2024-12-31", "cont_flag": "1"}
+        from datetime import datetime, timedelta
+
+        today = datetime.now().strftime("%Y-%m-%d")
+        yesterday = (datetime.now() - timedelta(days=5)).strftime("%Y-%m-%d")
+
+        fyers = fyersModel.FyersModel(
+            client_id=os.environ.get("FYERS_APP_ID"),
+            token=os.environ.get("FYERS_ACCESS_TOKEN"),
+            log_path=""
+        )
+
+        data = {
+            "symbol": f"NSE:{symbol}-EQ",
+            "resolution": "5",
+            "date_format": "1",
+            "range_from": yesterday,
+            "range_to": today,
+            "cont_flag": "1"
+        }
+
         response = fyers.history(data=data)
+
         if response['code'] == 200:
             candles = response['candles']
             df = pd.DataFrame(candles, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
             df['timestamp'] = pd.to_datetime(df['timestamp'], unit='s')
             df.set_index('timestamp', inplace=True)
+            logger.info(f"Live data fetched for {symbol} — {len(df)} candles")
             return df
         else:
+            logger.warning(f"Fyers error for {symbol}: {response} — using dummy")
             return get_dummy_data(symbol)
+
     except Exception as e:
-        logger.error(f"Fyers data error: {e}")
+        logger.error(f"Fyers data error for {symbol}: {e}")
         return get_dummy_data(symbol)
 
 
@@ -75,7 +98,10 @@ def save_signal(signal):
         return
     try:
         cursor = conn.cursor()
-        cursor.execute("INSERT INTO signals (symbol, action, entry_price, stop_loss, target, confidence, reason) VALUES (%s, %s, %s, %s, %s, %s, %s)", (signal['symbol'], "BUY", signal['entry'], signal['sl'], signal['target'], signal['score'], signal['reasons']))
+        cursor.execute(
+            "INSERT INTO signals (symbol, action, entry_price, stop_loss, target, confidence, reason) VALUES (%s, %s, %s, %s, %s, %s, %s)",
+            (signal['symbol'], "BUY", signal['entry'], signal['sl'], signal['target'], signal['score'], signal['reasons'])
+        )
         conn.commit()
         cursor.close()
         conn.close()
@@ -107,7 +133,16 @@ def run_scanner():
             if result and result['score'] >= 60:
                 logger.info(f"Signal found: {symbol} | Score: {result['score']}")
                 save_signal(result)
-                send_alert(symbol=result['symbol'], action="BUY", entry=result['entry'], sl=result['sl'], target=result['target'], confidence=result['score'], reason=result['reasons'], trailing_sl=result.get('trailing_sl'))
+                send_alert(
+                    symbol=result['symbol'],
+                    action="BUY",
+                    entry=result['entry'],
+                    sl=result['sl'],
+                    target=result['target'],
+                    confidence=result['score'],
+                    reason=result['reasons'],
+                    trailing_sl=result.get('trailing_sl')
+                )
         except Exception as e:
             logger.error(f"Scanner error for {symbol}: {e}")
 
@@ -115,4 +150,12 @@ def run_scanner():
 
 
 def send_test_alert():
-    send_alert(symbol="TEST", action="BUY", entry=100, sl=95, target=110, confidence=85, reason="PETS System Test")
+    send_alert(
+        symbol="TEST",
+        action="BUY",
+        entry=100,
+        sl=95,
+        target=110,
+        confidence=85,
+        reason="PETS System Test"
+    )
