@@ -2,6 +2,7 @@ import pandas as pd
 import numpy as np
 import logging
 import os
+import time
 from strategy import analyze_setup
 from telegram_alert import send_alert
 from database import get_connection
@@ -12,10 +13,27 @@ WATCHLIST = [
     "RELIANCE", "TCS", "HDFCBANK", "INFY", "ICICIBANK",
     "HINDUNILVR", "ITC", "SBIN", "BHARTIARTL", "KOTAKBANK",
     "LT", "AXISBANK", "ASIANPAINT", "MARUTI", "TITAN",
-    "SUNPHARMA", "ULTRACEMCO", "WIPRO", "NESTLEIND", "TECHM"
+    "SUNPHARMA", "ULTRACEMCO", "WIPRO", "NESTLEIND", "TECHM",
+    "HCLTECH", "BAJFINANCE", "BAJAJFINSV", "NTPC", "POWERGRID",
+    "ONGC", "COALINDIA", "JSWSTEEL", "TATASTEEL", "ADANIENT",
+    "ADANIPORTS", "DIVISLAB", "DRREDDY", "CIPLA", "APOLLOHOSP",
+    "EICHERMOT", "HEROMOTOCO", "BAJAJ-AUTO", "TATACONSUM", "BRITANNIA",
+    "GRASIM", "INDUSINDBK", "BPCL", "IOC", "HINDALCO",
+    "VEDL", "UPL", "SHREECEM", "SBILIFE", "HDFCLIFE",
+    "DABUR", "MARICO", "COLPAL", "GODREJCP", "PGHH",
+    "MCDOWELL-N", "UNITDSPR", "TRENT", "DMART", "NYKAA",
+    "ZOMATO", "PAYTM", "POLICYBZR", "NAUKRI", "IRCTC",
+    "ABCAPITAL", "MUTHOOTFIN", "CHOLAFIN", "BAJAJHLDNG", "SBICARD",
+    "TORNTPHARM", "AUROPHARMA", "ALKEM", "LUPIN", "BIOCON",
+    "PIIND", "ATUL", "DEEPAKNTR", "ASTRAL", "SUPREMEIND",
+    "VOLTAS", "HAVELLS", "CROMPTON", "POLYCAB", "KEI",
+    "GMRINFRA", "ADANIGREEN", "ADANITRANS", "TATAPOWER", "CESC",
+    "GAIL", "MGL", "IGL", "PETRONET", "CONCOR",
+    "MOTHERSON", "BOSCHLTD", "BALKRISIND", "EXIDEIND", "AMARAJABAT"
 ]
 
 KILL_SWITCH = {"losses": 0, "active": True}
+BATCH_INDEX = [0]
 
 
 def get_dummy_data(symbol):
@@ -69,17 +87,31 @@ def run_scanner():
     if not KILL_SWITCH["active"]:
         logger.warning("Kill switch active. Scanner paused.")
         return
-    logger.info("Scanning market...")
-    for symbol in WATCHLIST:
+
+    batch_size = 10
+    start = BATCH_INDEX[0]
+    end = start + batch_size
+    batch = WATCHLIST[start:end]
+
+    if not batch:
+        BATCH_INDEX[0] = 0
+        logger.info("Full watchlist scanned. Resetting.")
+        return
+
+    logger.info(f"Scanning batch {start}-{end}: {batch}")
+
+    for symbol in batch:
         try:
             df = get_live_data(symbol)
             result = analyze_setup(df, symbol)
-            if result and result['score'] >= 80:
+            if result and result['score'] >= 60:
                 logger.info(f"Signal found: {symbol} | Score: {result['score']}")
                 save_signal(result)
-                send_alert(symbol=result['symbol'], action="BUY", entry=result['entry'], sl=result['sl'], target=result['target'], confidence=result['score'], reason=result['reasons'])
+                send_alert(symbol=result['symbol'], action="BUY", entry=result['entry'], sl=result['sl'], target=result['target'], confidence=result['score'], reason=result['reasons'], trailing_sl=result.get('trailing_sl'))
         except Exception as e:
             logger.error(f"Scanner error for {symbol}: {e}")
+
+    BATCH_INDEX[0] = end
 
 
 def send_test_alert():
