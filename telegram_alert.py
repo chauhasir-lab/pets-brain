@@ -7,7 +7,7 @@ logger = logging.getLogger(__name__)
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
 
-def send_alert(symbol, action, entry, sl, target, confidence, reason, trailing_sl=None):
+def send_alert(symbol, action, entry, sl, target1, target2, confidence, reason, trailing_sl=None):
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
         logger.warning("Telegram not configured.")
         return
@@ -19,9 +19,10 @@ def send_alert(symbol, action, entry, sl, target, confidence, reason, trailing_s
 
 📌 *Stock:* {symbol}
 📊 *Action:* {action}
-💰 *Entry:* ₹{entry}
+💰 *Entry:* ₹{round(entry, 2)}
 🛑 *Stop Loss:* ₹{sl}
-{trailing_line}🎯 *Target:* ₹{target}
+{trailing_line}🎯 *Target 1:* ₹{target1} *(Book 50% here)*
+🎯 *Target 2:* ₹{target2} *(Trail rest)*
 📈 *Confidence:* {confidence}%
 📝 *Reason:* {reason}
 
