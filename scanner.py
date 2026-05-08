@@ -149,7 +149,7 @@ def run_scanner():
 
 
 def send_test_alert():
-   send_alert(
+  send_alert(
     symbol=result['symbol'],
     action="BUY",
     entry=result['entry'],
@@ -158,5 +158,7 @@ def send_test_alert():
     target2=result['target2'],
     confidence=result['score'],
     reason=result['reasons'],
-    trailing_sl=result.get('trailing_sl')
+    trailing_sl=result.get('trailing_sl'),
+    quantity=result.get('quantity'),
+    nifty_trend=result.get('nifty_trend')
 )
