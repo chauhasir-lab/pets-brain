@@ -129,7 +129,7 @@ def run_scanner():
         try:
             df = get_yahoo_data(symbol)
             result = analyze_setup(df, symbol)
-            if result and result['score'] >= 60:
+            if result and result['score'] >= 40:
                 logger.info(f"Signal found: {symbol} | Score: {result['score']}")
                 save_signal(result)
                 send_alert(
