@@ -149,12 +149,14 @@ def run_scanner():
 
 
 def send_test_alert():
-    send_alert(
-        symbol="TEST",
-        action="BUY",
-        entry=100,
-        sl=95,
-        target=110,
-        confidence=85,
-        reason="PETS System Test"
-    )
+   send_alert(
+    symbol=result['symbol'],
+    action="BUY",
+    entry=result['entry'],
+    sl=result['sl'],
+    target1=result['target1'],
+    target2=result['target2'],
+    confidence=result['score'],
+    reason=result['reasons'],
+    trailing_sl=result.get('trailing_sl')
+)
