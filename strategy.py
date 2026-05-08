@@ -6,13 +6,14 @@ from datetime import datetime
 logger = logging.getLogger(__name__)
 
 def is_market_hours():
-    now = datetime.now()
-    # IST = UTC + 5:30
-    ist_hour = (now.hour + 5) % 24
-    ist_minute = (now.minute + 30) % 60
-    if now.minute + 30 >= 60:
+    now = datetime.utcnow()
+    ist_hour = now.hour + 5
+    ist_minute = now.minute + 30
+    if ist_minute >= 60:
+        ist_minute -= 60
         ist_hour += 1
-    
+    if ist_hour >= 24:
+        ist_hour -= 24
     ist_time = ist_hour * 100 + ist_minute
     return 915 <= ist_time <= 1530
 
@@ -83,12 +84,12 @@ def analyze_setup(df, symbol):
         atr = latest['atr']
         entry = latest['close']
         sl = round(entry - (entry * 0.01), 2)
-        target = round(entry + (entry * 0.03), 2)
-        rr = round((target - entry) / (entry - sl), 2)
+        target1 = round(entry + (entry * 0.02), 2)
+        target2 = round(entry + (entry * 0.04), 2)
+        rr = round((target1 - entry) / (entry - sl), 2)
         trailing_sl = calculate_trailing_sl(entry, atr, entry)
 
-        min_target_move = entry * 0.02
-        if (target - entry) < min_target_move:
+        if (target1 - entry) < (entry * 0.015):
             return None
 
         if rr >= 2:
@@ -100,7 +101,7 @@ def analyze_setup(df, symbol):
         else:
             score -= 10
 
-        logger.info(f"Symbol: {symbol} | Score: {score} | Reasons: {', '.join(reasons)}")
+        logger.info(f"Symbol: {symbol} | Score: {score} | T1: {target1} | T2: {target2}")
 
         return {
             "symbol": symbol,
@@ -108,7 +109,8 @@ def analyze_setup(df, symbol):
             "entry": entry,
             "sl": sl,
             "trailing_sl": trailing_sl,
-            "target": target,
+            "target1": target1,
+            "target2": target2,
             "rr": rr,
             "reasons": ", ".join(reasons)
         }
