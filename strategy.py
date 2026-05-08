@@ -43,14 +43,49 @@ def check_volume_spike(df):
     latest_volume = df['volume'].iloc[-1]
     return latest_volume > (avg_volume.iloc[-1] * 1.5)
 
-def calculate_trailing_sl(entry, atr, current_price):
+def calculate_trailing_sl(entry, atr):
     trail_distance = 1.5 * atr
-    trailing_sl = round(current_price - trail_distance, 2)
-    return max(trailing_sl, round(entry - trail_distance, 2))
+    return round(entry - trail_distance, 2)
+
+def get_nifty_trend():
+    try:
+        import urllib.request
+        import json
+        from datetime import timedelta
+
+        end = int(datetime.utcnow().timestamp())
+        start = int((datetime.utcnow() - timedelta(days=3)).timestamp())
+        url = f"https://query1.finance.yahoo.com/v8/finance/chart/%5ENSEI?interval=1d&period1={start}&period2={end}"
+        req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
+        response = urllib.request.urlopen(req, timeout=10)
+        data = json.loads(response.read())
+        closes = data['chart']['result'][0]['indicators']['quote'][0]['close']
+        closes = [c for c in closes if c is not None]
+        if len(closes) >= 2:
+            if closes[-1] > closes[-2]:
+                return "BULLISH"
+            else:
+                return "BEARISH"
+    except Exception as e:
+        logger.error(f"Nifty trend error: {e}")
+    return "UNKNOWN"
+
+def calculate_position_size(entry, sl, capital=10000):
+    risk_amount = capital * 0.01
+    risk_per_share = entry - sl
+    if risk_per_share <= 0:
+        return 0
+    qty = int(risk_amount / risk_per_share)
+    return max(qty, 1)
 
 def analyze_setup(df, symbol):
     try:
         if not is_market_hours():
+            return None
+
+        nifty_trend = get_nifty_trend()
+        if nifty_trend == "BEARISH":
+            logger.info(f"Nifty bearish — skipping {symbol}")
             return None
 
         df = calculate_vwap(df)
@@ -87,7 +122,8 @@ def analyze_setup(df, symbol):
         target1 = round(entry + (entry * 0.02), 2)
         target2 = round(entry + (entry * 0.04), 2)
         rr = round((target1 - entry) / (entry - sl), 2)
-        trailing_sl = calculate_trailing_sl(entry, atr, entry)
+        trailing_sl = calculate_trailing_sl(entry, atr)
+        quantity = calculate_position_size(entry, sl)
 
         if (target1 - entry) < (entry * 0.015):
             return None
@@ -101,7 +137,7 @@ def analyze_setup(df, symbol):
         else:
             score -= 10
 
-        logger.info(f"Symbol: {symbol} | Score: {score} | T1: {target1} | T2: {target2}")
+        logger.info(f"Symbol: {symbol} | Score: {score} | T1: {target1} | T2: {target2} | Qty: {quantity}")
 
         return {
             "symbol": symbol,
@@ -112,6 +148,8 @@ def analyze_setup(df, symbol):
             "target1": target1,
             "target2": target2,
             "rr": rr,
+            "quantity": quantity,
+            "nifty_trend": nifty_trend,
             "reasons": ", ".join(reasons)
         }
 
