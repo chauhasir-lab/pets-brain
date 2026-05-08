@@ -1,8 +1,20 @@
 import pandas as pd
 import numpy as np
 import logging
+from datetime import datetime
 
 logger = logging.getLogger(__name__)
+
+def is_market_hours():
+    now = datetime.now()
+    # IST = UTC + 5:30
+    ist_hour = (now.hour + 5) % 24
+    ist_minute = (now.minute + 30) % 60
+    if now.minute + 30 >= 60:
+        ist_hour += 1
+    
+    ist_time = ist_hour * 100 + ist_minute
+    return 915 <= ist_time <= 1530
 
 def calculate_vwap(df):
     df['vwap'] = (df['volume'] * (df['high'] + df['low'] + df['close']) / 3).cumsum() / df['volume'].cumsum()
@@ -37,6 +49,9 @@ def calculate_trailing_sl(entry, atr, current_price):
 
 def analyze_setup(df, symbol):
     try:
+        if not is_market_hours():
+            return None
+
         df = calculate_vwap(df)
         df = calculate_ema(df, 20)
         df = calculate_ema(df, 50)
@@ -67,10 +82,14 @@ def analyze_setup(df, symbol):
 
         atr = latest['atr']
         entry = latest['close']
-        sl = round(entry - (1.5 * atr), 2)
-        target = round(entry + (4 * atr), 2)
+        sl = round(entry - (entry * 0.01), 2)
+        target = round(entry + (entry * 0.03), 2)
         rr = round((target - entry) / (entry - sl), 2)
         trailing_sl = calculate_trailing_sl(entry, atr, entry)
+
+        min_target_move = entry * 0.02
+        if (target - entry) < min_target_move:
+            return None
 
         if rr >= 2:
             score += 10
