@@ -68,7 +68,7 @@ def analyze_setup(df, symbol):
         atr = latest['atr']
         entry = latest['close']
         sl = round(entry - (1.5 * atr), 2)
-        target = round(entry + (3 * atr), 2)
+       target = round(entry + (4 * atr), 2)
         rr = round((target - entry) / (entry - sl), 2)
         trailing_sl = calculate_trailing_sl(entry, atr, entry)
 
