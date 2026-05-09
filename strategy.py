@@ -62,10 +62,15 @@ def get_nifty_trend():
         closes = data['chart']['result'][0]['indicators']['quote'][0]['close']
         closes = [c for c in closes if c is not None]
         if len(closes) >= 2:
-            if closes[-1] > closes[-2]:
-                return "BULLISH"
-            else:
+            change_pct = ((closes[-1] - closes[-2]) / closes[-2]) * 100
+            logger.info(f"Nifty change: {round(change_pct, 2)}%")
+            if change_pct < -1.0:
                 return "BEARISH"
+            else:
+                return "BULLISH"
+    except Exception as e:
+        logger.error(f"Nifty trend error: {e}")
+    return "BULLISH"
     except Exception as e:
         logger.error(f"Nifty trend error: {e}")
     return "UNKNOWN"
