@@ -17,6 +17,31 @@ def is_market_hours():
     ist_time = ist_hour * 100 + ist_minute
     return 915 <= ist_time <= 1530
 
+def get_nifty_trend():
+    try:
+        import urllib.request
+        import json
+        from datetime import timedelta
+
+        end = int(datetime.utcnow().timestamp())
+        start = int((datetime.utcnow() - timedelta(days=3)).timestamp())
+        url = f"https://query1.finance.yahoo.com/v8/finance/chart/%5ENSEI?interval=1d&period1={start}&period2={end}"
+        req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
+        response = urllib.request.urlopen(req, timeout=10)
+        data = json.loads(response.read())
+        closes = data['chart']['result'][0]['indicators']['quote'][0]['close']
+        closes = [c for c in closes if c is not None]
+        if len(closes) >= 2:
+            change_pct = ((closes[-1] - closes[-2]) / closes[-2]) * 100
+            logger.info(f"Nifty change: {round(change_pct, 2)}%")
+            if change_pct < -1.0:
+                return "BEARISH"
+            else:
+                return "BULLISH"
+    except Exception as e:
+        logger.error(f"Nifty trend error: {e}")
+    return "BULLISH"
+
 def calculate_vwap(df):
     df['vwap'] = (df['volume'] * (df['high'] + df['low'] + df['close']) / 3).cumsum() / df['volume'].cumsum()
     return df
@@ -46,34 +71,6 @@ def check_volume_spike(df):
 def calculate_trailing_sl(entry, atr):
     trail_distance = 1.5 * atr
     return round(entry - trail_distance, 2)
-
-def get_nifty_trend():
-    try:
-        import urllib.request
-        import json
-        from datetime import timedelta
-
-        end = int(datetime.utcnow().timestamp())
-        start = int((datetime.utcnow() - timedelta(days=3)).timestamp())
-        url = f"https://query1.finance.yahoo.com/v8/finance/chart/%5ENSEI?interval=1d&period1={start}&period2={end}"
-        req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
-        response = urllib.request.urlopen(req, timeout=10)
-        data = json.loads(response.read())
-        closes = data['chart']['result'][0]['indicators']['quote'][0]['close']
-        closes = [c for c in closes if c is not None]
-        if len(closes) >= 2:
-            change_pct = ((closes[-1] - closes[-2]) / closes[-2]) * 100
-            logger.info(f"Nifty change: {round(change_pct, 2)}%")
-            if change_pct < -1.0:
-                return "BEARISH"
-            else:
-                return "BULLISH"
-    except Exception as e:
-        logger.error(f"Nifty trend error: {e}")
-    return "BULLISH"
-    except Exception as e:
-        logger.error(f"Nifty trend error: {e}")
-    return "UNKNOWN"
 
 def calculate_position_size(entry, sl, capital=10000):
     risk_amount = capital * 0.01
