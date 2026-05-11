@@ -22,7 +22,6 @@ def get_nifty_trend():
         import urllib.request
         import json
         from datetime import timedelta
-
         end = int(datetime.utcnow().timestamp())
         start = int((datetime.utcnow() - timedelta(days=3)).timestamp())
         url = f"https://query1.finance.yahoo.com/v8/finance/chart/%5ENSEI?interval=1d&period1={start}&period2={end}"
@@ -34,7 +33,7 @@ def get_nifty_trend():
         if len(closes) >= 2:
             change_pct = ((closes[-1] - closes[-2]) / closes[-2]) * 100
             logger.info(f"Nifty change: {round(change_pct, 2)}%")
-           if change_pct < -1.5:
+            if change_pct < -1.5:
                 return "BEARISH"
             else:
                 return "BULLISH"
@@ -84,40 +83,31 @@ def analyze_setup(df, symbol):
     try:
         if not is_market_hours():
             return None
-
         nifty_trend = get_nifty_trend()
         if nifty_trend == "BEARISH":
             logger.info(f"Nifty bearish — skipping {symbol}")
             return None
-
         df = calculate_vwap(df)
         df = calculate_ema(df, 20)
         df = calculate_ema(df, 50)
         df = calculate_atr(df)
         df = calculate_rsi(df)
-
         latest = df.iloc[-1]
         prev = df.iloc[-2]
-
         score = 0
         reasons = []
-
         if prev['close'] < prev['vwap'] and latest['close'] > latest['vwap']:
             score += 30
             reasons.append("VWAP Reclaim")
-
         if latest['close'] > latest['ema_20'] > latest['ema_50']:
             score += 20
             reasons.append("EMA Bullish")
-
         if check_volume_spike(df):
             score += 25
             reasons.append("Volume Spike")
-
         if 50 < latest['rsi'] < 70:
             score += 15
             reasons.append("RSI Momentum")
-
         atr = latest['atr']
         entry = latest['close']
         sl = round(entry - (entry * 0.01), 2)
@@ -126,10 +116,8 @@ def analyze_setup(df, symbol):
         rr = round((target1 - entry) / (entry - sl), 2)
         trailing_sl = calculate_trailing_sl(entry, atr)
         quantity = calculate_position_size(entry, sl)
-
         if (target1 - entry) < (entry * 0.015):
             return None
-
         if rr >= 2:
             score += 10
             reasons.append(f"RR {rr}")
@@ -138,9 +126,7 @@ def analyze_setup(df, symbol):
             reasons.append(f"RR {rr}")
         else:
             score -= 10
-
         logger.info(f"Symbol: {symbol} | Score: {score} | T1: {target1} | T2: {target2} | Qty: {quantity}")
-
         return {
             "symbol": symbol,
             "score": score,
@@ -154,7 +140,6 @@ def analyze_setup(df, symbol):
             "nifty_trend": nifty_trend,
             "reasons": ", ".join(reasons)
         }
-
     except Exception as e:
         logger.error(f"Strategy error for {symbol}: {e}")
         return None
