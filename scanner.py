@@ -153,7 +153,7 @@ def run_scanner():
         try:
             df = get_live_data(symbol)
             result = analyze_setup(df, symbol)
-            if result and result['score'] >= 45:
+            if result and result['score'] >= 60:
                 logger.info(f"Signal found: {symbol} | Score: {result['score']}")
                 save_signal(result)
                 send_alert(
