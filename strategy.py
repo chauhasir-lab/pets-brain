@@ -34,7 +34,7 @@ def get_nifty_trend():
         if len(closes) >= 2:
             change_pct = ((closes[-1] - closes[-2]) / closes[-2]) * 100
             logger.info(f"Nifty change: {round(change_pct, 2)}%")
-            if change_pct < -1.0:
+           if change_pct < -1.5:
                 return "BEARISH"
             else:
                 return "BULLISH"
