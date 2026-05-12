@@ -9,16 +9,21 @@ DAILY_TRADES = {"count": 0, "date": None}
 RISK_PER_TRADE = 0.02
 
 def is_market_hours():
-    now = datetime.utcnow()
-    ist_hour = now.hour + 5
-    ist_minute = now.minute + 30
-    if ist_minute >= 60:
-        ist_minute -= 60
-        ist_hour += 1
-    if ist_hour >= 24:
-        ist_hour -= 24
-    ist_time = ist_hour * 100 + ist_minute
-    return (920 <= ist_time <= 1030) or (1345 <= ist_time <= 1445)
+    try:
+        import pytz
+        tz = pytz.timezone('Asia/Kolkata')
+        now = datetime.now(tz)
+        if now.weekday() > 4:
+            return False
+        ist_time = now.hour * 100 + now.minute
+        return 915 <= ist_time <= 1530
+    except Exception:
+        now = datetime.utcnow()
+        ist = now + timedelta(hours=5, minutes=30)
+        if ist.weekday() > 4:
+            return False
+        ist_time = ist.hour * 100 + ist.minute
+        return 915 <= ist_time <= 1530
 
 def check_daily_limit():
     today = datetime.utcnow().date()
