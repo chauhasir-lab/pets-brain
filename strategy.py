@@ -6,6 +6,7 @@ from datetime import datetime
 logger = logging.getLogger(__name__)
 
 DAILY_TRADES = {"count": 0, "date": None}
+RISK_PER_TRADE = 0.02
 
 def is_market_hours():
     now = datetime.utcnow()
@@ -78,12 +79,12 @@ def detect_market_regime(df):
     ema20 = df['ema_20'].iloc[-1]
     ema50 = df['ema_50'].iloc[-1]
 
-    if ema20 > ema50 and atr > avg_atr:
+    if atr > avg_atr * 1.5:
+        return "HIGH_VOLATILITY", 2.0
+    elif ema20 > ema50 and atr > avg_atr:
         return "TRENDING", 1.8
     elif atr < avg_atr * 0.8:
         return "SIDEWAYS", 1.2
-    elif atr > avg_atr * 1.5:
-        return "HIGH_VOLATILITY", 2.0
     else:
         return "NORMAL", 1.5
 
@@ -101,11 +102,13 @@ def check_volume_spike(df):
     return latest_volume > (avg_volume.iloc[-1] * 1.5)
 
 def calculate_position_size(entry, sl, capital=10000):
-    risk_amount = capital * 0.01
+    risk_amount = capital * RISK_PER_TRADE
     risk_per_share = entry - sl
     if risk_per_share <= 0:
         return 0
-    qty = int(risk_amount / risk_per_share)
+    risk_qty = int(risk_amount / risk_per_share)
+    capital_qty = int(capital / entry)
+    qty = min(risk_qty, capital_qty)
     return max(qty, 1)
 
 def analyze_setup(df, symbol):
@@ -132,6 +135,7 @@ def analyze_setup(df, symbol):
         prev = df.iloc[-2]
 
         regime, atr_multiplier = detect_market_regime(df)
+        avg_volume = df['volume'].rolling(window=10).mean().iloc[-1]
 
         score = 0
         reasons = []
@@ -139,7 +143,9 @@ def analyze_setup(df, symbol):
         score += 20
         reasons.append("Nifty OK")
 
-        if prev['close'] < prev['vwap'] and latest['close'] > latest['vwap']:
+        if (prev['close'] < prev['vwap'] and
+                latest['close'] > latest['vwap'] and
+                latest['volume'] > avg_volume):
             score += 15
             reasons.append("VWAP Reclaim")
 
@@ -151,15 +157,15 @@ def analyze_setup(df, symbol):
             score += 20
             reasons.append("Volume Spike")
 
-        if 50 < latest['rsi'] < 70:
+        if 55 < latest['rsi'] < 80:
             score += 15
             reasons.append("RSI Momentum")
 
         atr = latest['atr']
         entry = latest['close']
         sl = round(entry - (atr_multiplier * atr), 2)
-        target1 = round(entry + (entry * 0.02), 2)
-        target2 = round(entry + (entry * 0.04), 2)
+        target1 = round(entry + (1.5 * atr), 2)
+        target2 = round(entry + (3.0 * atr), 2)
         trailing_sl = round(entry - (atr_multiplier * atr), 2)
 
         rr = round((target1 - entry) / (entry - sl), 2) if (entry - sl) > 0 else 0
@@ -174,7 +180,7 @@ def analyze_setup(df, symbol):
         else:
             score -= 15
 
-        logger.info(f"Symbol: {symbol} | Score: {score} | Regime: {regime} | ATR mult: {atr_multiplier} | T1: {target1} | Qty: {quantity}")
+        logger.info(f"Symbol: {symbol} | Score: {score} | Regime: {regime} | T1: {target1} | T2: {target2} | Qty: {quantity}")
 
         return {
             "symbol": symbol,
