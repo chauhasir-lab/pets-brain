@@ -15,7 +15,7 @@ def get_connection():
 
         return conn
 
-    except Exception as e:
+    except Exception:
 
         try:
 
@@ -53,7 +53,7 @@ def create_tables():
 
     cursor = conn.cursor()
 
-    # Historical signal storage
+    # Historical signals
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS signals (
             id SERIAL PRIMARY KEY,
@@ -68,7 +68,7 @@ def create_tables():
         );
     """)
 
-    # Final trade outcomes
+    # Trade log
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS trade_log (
             id SERIAL PRIMARY KEY,
@@ -80,7 +80,7 @@ def create_tables():
         );
     """)
 
-    # Active trade lifecycle
+    # Active lifecycle trades
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS active_signals (
 
@@ -119,6 +119,46 @@ def create_tables():
             sold BOOLEAN DEFAULT FALSE,
 
             notes TEXT
+        );
+    """)
+
+    # Analytics memory
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS trade_analytics (
+
+            id SERIAL PRIMARY KEY,
+
+            symbol TEXT,
+
+            setup_type TEXT,
+
+            market_regime TEXT,
+
+            result TEXT,
+
+            entry_price NUMERIC(12,4),
+
+            exit_price NUMERIC(12,4),
+
+            stop_loss NUMERIC(12,4),
+
+            target1 NUMERIC(12,4),
+
+            target2 NUMERIC(12,4),
+
+            quantity INTEGER,
+
+            pnl NUMERIC(12,2),
+
+            rr NUMERIC(12,4),
+
+            holding_minutes INTEGER,
+
+            confidence INTEGER,
+
+            notes TEXT,
+
+            created_at TIMESTAMP DEFAULT NOW()
         );
     """)
 
@@ -187,8 +227,6 @@ def expire_old_signals():
         cursor.close()
         conn.close()
 
-        logger.info("Old signals expired.")
-
     except Exception as e:
 
         logger.error(f"Expire signal error: {e}")
@@ -212,7 +250,11 @@ def get_active_bought_trades():
                 stop_loss,
                 target1,
                 target2,
-                quantity
+                quantity,
+                rr,
+                score,
+                signal_time,
+                setup_type
             FROM active_signals
             WHERE status = 'BOUGHT'
         """)
@@ -231,7 +273,7 @@ def get_active_bought_trades():
         return []
 
 
-def close_trade(symbol, result):
+def close_trade(symbol, result, exit_price=None):
 
     try:
 
@@ -242,6 +284,109 @@ def close_trade(symbol, result):
 
         cursor = conn.cursor()
 
+        # Fetch trade data
+        cursor.execute("""
+            SELECT
+                symbol,
+                setup_type,
+                entry_price,
+                stop_loss,
+                target1,
+                target2,
+                quantity,
+                rr,
+                score,
+                signal_time,
+                notes
+            FROM active_signals
+            WHERE symbol = %s
+            AND status = 'BOUGHT'
+            LIMIT 1
+        """, (symbol,))
+
+        trade = cursor.fetchone()
+
+        if not trade:
+            cursor.close()
+            conn.close()
+            return
+
+        (
+            symbol,
+            setup_type,
+            entry_price,
+            stop_loss,
+            target1,
+            target2,
+            quantity,
+            rr,
+            confidence,
+            signal_time,
+            notes
+        ) = trade
+
+        if exit_price is None:
+            exit_price = entry_price
+
+        pnl = (
+            (float(exit_price) - float(entry_price))
+            * int(quantity)
+        )
+
+        holding_minutes = 0
+
+        try:
+            from datetime import datetime
+
+            holding_minutes = int(
+                (datetime.utcnow() - signal_time).total_seconds() / 60
+            )
+        except Exception:
+            pass
+
+        # Save analytics
+        cursor.execute("""
+            INSERT INTO trade_analytics
+            (
+                symbol,
+                setup_type,
+                market_regime,
+                result,
+                entry_price,
+                exit_price,
+                stop_loss,
+                target1,
+                target2,
+                quantity,
+                pnl,
+                rr,
+                holding_minutes,
+                confidence,
+                notes
+            )
+            VALUES
+            (%s, %s, %s, %s, %s, %s, %s,
+             %s, %s, %s, %s, %s, %s,
+             %s, %s)
+        """, (
+            symbol,
+            setup_type,
+            "UNKNOWN",
+            result,
+            entry_price,
+            exit_price,
+            stop_loss,
+            target1,
+            target2,
+            quantity,
+            pnl,
+            rr,
+            holding_minutes,
+            confidence,
+            notes
+        ))
+
+        # Close active trade
         cursor.execute("""
             UPDATE active_signals
             SET status = %s,
@@ -256,7 +401,7 @@ def close_trade(symbol, result):
         cursor.close()
         conn.close()
 
-        logger.info(f"Trade closed: {symbol} -> {result}")
+        logger.info(f"Trade closed and saved: {symbol}")
 
     except Exception as e:
 
