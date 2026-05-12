@@ -12,8 +12,10 @@ def get_connection():
         try:
             import re
             url = os.environ.get("NEON_DATABASE_URL")
+
             pattern = r'postgresql://([^:]+):([^@]+)@([^/]+)/(.+)'
             match = re.match(pattern, url)
+
             conn = pg8000.connect(
                 user=match.group(1),
                 password=match.group(2),
@@ -21,16 +23,22 @@ def get_connection():
                 database=match.group(4),
                 ssl_context=True
             )
+
             return conn
+
         except Exception as e2:
             logger.error(f"Database connection failed: {e2}")
             return None
 
+
 def create_tables():
     conn = get_connection()
+
     if not conn:
         return
+
     cursor = conn.cursor()
+
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS signals (
             id SERIAL PRIMARY KEY,
@@ -44,6 +52,7 @@ def create_tables():
             created_at TIMESTAMP DEFAULT NOW()
         );
     """)
+
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS trade_log (
             id SERIAL PRIMARY KEY,
@@ -54,7 +63,74 @@ def create_tables():
             created_at TIMESTAMP DEFAULT NOW()
         );
     """)
+
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS active_signals (
+            id SERIAL PRIMARY KEY,
+
+            symbol TEXT NOT NULL,
+            setup_type TEXT DEFAULT 'VWAP_MOMENTUM',
+
+            status TEXT DEFAULT 'NEW',
+
+            entry_price NUMERIC(12,4),
+            stop_loss NUMERIC(12,4),
+
+            target1 NUMERIC(12,4),
+            target2 NUMERIC(12,4),
+
+            score INTEGER,
+            rr NUMERIC(12,4),
+
+            quantity INTEGER,
+
+            signal_time TIMESTAMP DEFAULT NOW(),
+            last_updated TIMESTAMP DEFAULT NOW(),
+
+            expiry_time TIMESTAMP,
+
+            telegram_message_id TEXT,
+
+            bought BOOLEAN DEFAULT FALSE,
+            sold BOOLEAN DEFAULT FALSE,
+
+            notes TEXT
+        );
+    """)
+
     conn.commit()
+
     cursor.close()
     conn.close()
+
     logger.info("Tables ready.")
+
+
+def is_signal_active(symbol):
+    try:
+        conn = get_connection()
+
+        if not conn:
+            return False
+
+        cursor = conn.cursor()
+
+        cursor.execute("""
+            SELECT id
+            FROM active_signals
+            WHERE symbol = %s
+            AND status IN ('NEW', 'ACTIVE', 'BOUGHT')
+            AND DATE(signal_time) = CURRENT_DATE
+            LIMIT 1
+        """, (symbol,))
+
+        result = cursor.fetchone()
+
+        cursor.close()
+        conn.close()
+
+        return result is not None
+
+    except Exception as e:
+        logger.error(f"Error checking active signal: {e}")
+        return False
