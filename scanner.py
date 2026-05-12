@@ -178,10 +178,10 @@ def save_signal(signal):
 
     except Exception as e:
         logger.error(f"Save signal error: {e}")
-
-
+}")
 def run_scanner():
-        expire_old_signals()
+
+    expire_old_signals()
 
     if not KILL_SWITCH["active"]:
         logger.warning("Kill switch active.")
@@ -201,6 +201,45 @@ def run_scanner():
 
     logger.info(f"Scanning batch {start}-{end}")
 
+    for symbol in batch:
+
+        try:
+
+            # Prevent duplicate signals
+            if is_signal_active(symbol):
+                logger.info(f"Skipping duplicate active signal: {symbol}")
+                continue
+
+            df = get_yahoo_data(symbol)
+
+            result = analyze_setup(df, symbol)
+
+            if result and result['score'] >= 60:
+
+                logger.info(
+                    f"Signal found: {symbol} | Score: {result['score']}"
+                )
+
+                save_signal(result)
+
+                send_alert(
+                    symbol=result['symbol'],
+                    action="BUY",
+                    entry=result['entry'],
+                    sl=result['sl'],
+                    target1=result['target1'],
+                    target2=result['target2'],
+                    confidence=result['score'],
+                    reason=result['reasons'],
+                    trailing_sl=result.get('trailing_sl'),
+                    quantity=result.get('quantity'),
+                    nifty_trend=result.get('nifty_trend')
+                )
+
+        except Exception as e:
+            logger.error(f"Scanner error for {symbol}: {e}")
+
+    BATCH_INDEX[0] = end
     for symbol in batch:
 
         try:
