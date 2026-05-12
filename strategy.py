@@ -1,7 +1,7 @@
 import pandas as pd
 import numpy as np
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 
 logger = logging.getLogger(__name__)
 
@@ -39,9 +39,8 @@ def get_nifty_trend():
     try:
         import urllib.request
         import json
-        from datetime import timedelta
         end = int(datetime.utcnow().timestamp())
-        start = int((datetime.utcnow() - timedelta(days=3)).timestamp())
+        start = int((datetime.utcnow() - timedelta(days=5)).timestamp())
         url = f"https://query1.finance.yahoo.com/v8/finance/chart/%5ENSEI?interval=1d&period1={start}&period2={end}"
         req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
         response = urllib.request.urlopen(req, timeout=10)
@@ -60,7 +59,9 @@ def get_nifty_trend():
     return "BULLISH"
 
 def calculate_vwap(df):
-    df['vwap'] = (df['volume'] * (df['high'] + df['low'] + df['close']) / 3).cumsum() / df['volume'].cumsum()
+    df['tp'] = (df['high'] + df['low'] + df['close']) / 3
+    df['tpv'] = df['tp'] * df['volume']
+    df['vwap'] = df['tpv'].cumsum() / df['volume'].cumsum()
     return df
 
 def calculate_ema(df, period):
@@ -85,19 +86,19 @@ def detect_market_regime(df):
     ema50 = df['ema_50'].iloc[-1]
 
     if atr > avg_atr * 1.5:
-        return "HIGH_VOLATILITY", 2.0
+        return "HIGH_VOLATILITY", 1.0
     elif ema20 > ema50 and atr > avg_atr:
-        return "TRENDING", 1.8
+        return "TRENDING", 1.5
     elif atr < avg_atr * 0.8:
         return "SIDEWAYS", 1.2
     else:
-        return "NORMAL", 1.5
+        return "NORMAL", 1.3
 
 def calculate_rsi(df, period=14):
     delta = df['close'].diff()
     gain = delta.where(delta > 0, 0).rolling(window=period).mean()
     loss = (-delta.where(delta < 0, 0)).rolling(window=period).mean()
-    rs = gain / loss
+    rs = gain / (loss + 1e-10)
     df['rsi'] = 100 - (100 / (1 + rs))
     return df
 
@@ -136,6 +137,11 @@ def analyze_setup(df, symbol):
         df = calculate_atr(df, period=20)
         df = calculate_rsi(df)
 
+        df = df.dropna(subset=['atr', 'ema_20', 'ema_50', 'rsi', 'vwap'])
+
+        if len(df) < 3:
+            return None
+
         latest = df.iloc[-1]
         prev = df.iloc[-2]
 
@@ -169,9 +175,9 @@ def analyze_setup(df, symbol):
         atr = latest['atr']
         entry = latest['close']
         sl = round(entry - (atr_multiplier * atr), 2)
-        target1 = round(entry + (1.5 * atr), 2)
-        target2 = round(entry + (3.0 * atr), 2)
-        trailing_sl = round(entry - (atr_multiplier * atr), 2)
+        target1 = round(entry + (2.0 * atr_multiplier * atr), 2)
+        target2 = round(entry + (3.5 * atr_multiplier * atr), 2)
+        trailing_sl = sl
 
         rr = round((target1 - entry) / (entry - sl), 2) if (entry - sl) > 0 else 0
         quantity = calculate_position_size(entry, sl)
@@ -183,9 +189,9 @@ def analyze_setup(df, symbol):
             score += 5
             reasons.append(f"RR {rr}")
         else:
-            score -= 15
+            score -= 10
 
-        logger.info(f"Symbol: {symbol} | Score: {score} | Regime: {regime} | T1: {target1} | T2: {target2} | Qty: {quantity}")
+        logger.info(f"Symbol: {symbol} | Score: {score} | Regime: {regime} | RR: {rr} | T1: {target1} | Qty: {quantity}")
 
         return {
             "symbol": symbol,
