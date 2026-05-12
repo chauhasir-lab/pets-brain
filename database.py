@@ -134,3 +134,29 @@ def is_signal_active(symbol):
     except Exception as e:
         logger.error(f"Error checking active signal: {e}")
         return False
+def expire_old_signals():
+
+    try:
+        conn = get_connection()
+
+        if not conn:
+            return
+
+        cursor = conn.cursor()
+
+        cursor.execute("""
+            UPDATE active_signals
+            SET status = 'EXPIRED'
+            WHERE status = 'NEW'
+            AND signal_time < NOW() - INTERVAL '2 hours'
+        """)
+
+        conn.commit()
+
+        cursor.close()
+        conn.close()
+
+        logger.info("Old signals expired.")
+
+    except Exception as e:
+        logger.error(f"Expire signal error: {e}")
