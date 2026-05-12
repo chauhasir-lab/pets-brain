@@ -43,6 +43,10 @@ KILL_SWITCH = {
 
 BATCH_INDEX = [0]
 
+SCAN_LOCK = {
+    "running": False
+}
+
 
 def get_dummy_data(symbol):
 
@@ -70,6 +74,7 @@ def get_dummy_data(symbol):
 def get_yahoo_data(symbol):
 
     try:
+
         import urllib.request
         import json
 
@@ -132,6 +137,7 @@ def save_signal(signal):
 
         cursor = conn.cursor()
 
+        # Historical signals
         cursor.execute("""
             INSERT INTO signals
             (
@@ -154,6 +160,7 @@ def save_signal(signal):
             signal['reasons']
         ))
 
+        # Active lifecycle tracking
         cursor.execute("""
             INSERT INTO active_signals
             (
@@ -194,65 +201,79 @@ def save_signal(signal):
 
 def run_scanner():
 
-    expire_old_signals()
-
-    if not KILL_SWITCH["active"]:
-        logger.warning("Kill switch active.")
+    # Prevent parallel scans
+    if SCAN_LOCK["running"]:
+        logger.warning("Scanner already running. Skipping.")
         return
 
-    batch_size = 10
+    SCAN_LOCK["running"] = True
 
-    start = BATCH_INDEX[0]
-    end = start + batch_size
+    try:
 
-    batch = WATCHLIST[start:end]
+        expire_old_signals()
 
-    if not batch:
-        BATCH_INDEX[0] = 0
-        logger.info("Watchlist completed.")
-        return
+        if not KILL_SWITCH["active"]:
+            logger.warning("Kill switch active.")
+            return
 
-    logger.info(f"Scanning stocks {start} to {end}")
+        batch_size = 10
 
-    for symbol in batch:
+        start = BATCH_INDEX[0]
+        end = start + batch_size
 
-        try:
+        batch = WATCHLIST[start:end]
 
-            if is_signal_active(symbol):
-                logger.info(f"Skipping duplicate signal: {symbol}")
-                continue
+        if not batch:
+            BATCH_INDEX[0] = 0
+            logger.info("Watchlist completed.")
+            return
 
-            df = get_yahoo_data(symbol)
+        logger.info(f"Scanning stocks {start} to {end}")
 
-            result = analyze_setup(df, symbol)
+        for symbol in batch:
 
-            if result and result['score'] >= 60:
+            try:
 
-                logger.info(
-                    f"Signal found: {symbol} | Score: {result['score']}"
-                )
+                # Prevent duplicate active signals
+                if is_signal_active(symbol):
+                    logger.info(f"Skipping duplicate signal: {symbol}")
+                    continue
 
-                save_signal(result)
+                df = get_yahoo_data(symbol)
 
-                send_alert(
-                    symbol=result['symbol'],
-                    action="BUY",
-                    entry=result['entry'],
-                    sl=result['sl'],
-                    target1=result['target1'],
-                    target2=result['target2'],
-                    confidence=result['score'],
-                    reason=result['reasons'],
-                    trailing_sl=result.get('trailing_sl'),
-                    quantity=result.get('quantity'),
-                    nifty_trend=result.get('nifty_trend')
-                )
+                result = analyze_setup(df, symbol)
 
-        except Exception as e:
+                if result and result['score'] >= 60:
 
-            logger.error(f"Scanner error for {symbol}: {e}")
+                    logger.info(
+                        f"Signal found: {symbol} | Score: {result['score']}"
+                    )
 
-    BATCH_INDEX[0] = end
+                    save_signal(result)
+
+                    send_alert(
+                        symbol=result['symbol'],
+                        action="BUY",
+                        entry=result['entry'],
+                        sl=result['sl'],
+                        target1=result['target1'],
+                        target2=result['target2'],
+                        confidence=result['score'],
+                        reason=result['reasons'],
+                        trailing_sl=result.get('trailing_sl'),
+                        quantity=result.get('quantity'),
+                        nifty_trend=result.get('nifty_trend')
+                    )
+
+            except Exception as e:
+
+                logger.error(f"Scanner error for {symbol}: {e}")
+
+        BATCH_INDEX[0] = end
+
+    finally:
+
+        SCAN_LOCK["running"] = False
 
 
 def send_test_alert():
