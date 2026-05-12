@@ -91,7 +91,7 @@ def get_yahoo_data(symbol):
         yahoo_symbol = f"{symbol}.NS"
         end = int(datetime.now().timestamp())
         start = int((datetime.now() - timedelta(days=5)).timestamp())
-        url = f"https://query1.finance.yahoo.com/v8/finance/chart/{yahoo_symbol}?interval=5m&period1={start}&period2={end}"
+        url = f"https://query1.finance.yahoo.com/v8/finance/chart/{yahoo_symbol}?interval=15m&period1={start}&period2={end}"
         req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
         response = urllib.request.urlopen(req, timeout=10)
         data = json.loads(response.read())
