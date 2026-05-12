@@ -4,11 +4,21 @@ import logging
 from datetime import datetime, timedelta
 
 from strategy import analyze_setup
-from telegram_alert import send_alert
+
+from telegram_alert import (
+    send_alert,
+    send_target_hit,
+    send_sl_hit,
+    send_trade_update
+)
+
 from database import (
     get_connection,
     is_signal_active,
-    expire_old_signals
+    expire_old_signals,
+    get_active_bought_trades,
+    close_trade,
+    update_trade_note
 )
 
 logger = logging.getLogger(__name__)
@@ -100,6 +110,7 @@ def get_yahoo_data(symbol):
         result = data['chart']['result'][0]
 
         timestamps = result['timestamp']
+
         ohlcv = result['indicators']['quote'][0]
 
         df = pd.DataFrame({
@@ -114,8 +125,6 @@ def get_yahoo_data(symbol):
 
         if len(df) < 20:
             return get_dummy_data(symbol)
-
-        logger.info(f"Yahoo data fetched: {symbol}")
 
         return df
 
@@ -137,7 +146,6 @@ def save_signal(signal):
 
         cursor = conn.cursor()
 
-        # Historical signals
         cursor.execute("""
             INSERT INTO signals
             (
@@ -160,7 +168,6 @@ def save_signal(signal):
             signal['reasons']
         ))
 
-        # Active lifecycle tracking
         cursor.execute("""
             INSERT INTO active_signals
             (
@@ -192,16 +199,71 @@ def save_signal(signal):
         cursor.close()
         conn.close()
 
-        logger.info(f"Signal saved: {signal['symbol']}")
-
     except Exception as e:
 
         logger.error(f"Save signal error: {e}")
 
 
+def monitor_active_trades():
+
+    trades = get_active_bought_trades()
+
+    if not trades:
+        return
+
+    logger.info(f"Monitoring {len(trades)} active trades")
+
+    for trade in trades:
+
+        try:
+
+            symbol = trade[0]
+            entry = float(trade[1])
+            sl = float(trade[2])
+            target1 = float(trade[3])
+            target2 = float(trade[4])
+
+            df = get_yahoo_data(symbol)
+
+            current_price = float(df['close'].iloc[-1])
+
+            # STOP LOSS HIT
+            if current_price <= sl:
+
+                send_sl_hit(symbol, sl, current_price)
+
+                close_trade(symbol, "SL_HIT")
+
+                continue
+
+            # TARGET 2 HIT
+            if current_price >= target2:
+
+                send_target_hit(symbol, target2, current_price)
+
+                close_trade(symbol, "TARGET2_HIT")
+
+                continue
+
+            # TARGET 1 HIT
+            if current_price >= target1:
+
+                note = (
+                    f"Target 1 reached near ₹{target1}. "
+                    f"Consider partial booking."
+                )
+
+                send_target_hit(symbol, target1, current_price)
+
+                update_trade_note(symbol, note)
+
+        except Exception as e:
+
+            logger.error(f"Trade monitor error: {e}")
+
+
 def run_scanner():
 
-    # Prevent parallel scans
     if SCAN_LOCK["running"]:
         logger.warning("Scanner already running. Skipping.")
         return
@@ -211,6 +273,8 @@ def run_scanner():
     try:
 
         expire_old_signals()
+
+        monitor_active_trades()
 
         if not KILL_SWITCH["active"]:
             logger.warning("Kill switch active.")
@@ -234,7 +298,6 @@ def run_scanner():
 
             try:
 
-                # Prevent duplicate active signals
                 if is_signal_active(symbol):
                     logger.info(f"Skipping duplicate signal: {symbol}")
                     continue
