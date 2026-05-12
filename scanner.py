@@ -1,7 +1,6 @@
 import pandas as pd
 import numpy as np
 import logging
-import os
 from datetime import datetime, timedelta
 
 from strategy import analyze_setup
@@ -11,6 +10,7 @@ from database import (
     is_signal_active,
     expire_old_signals
 )
+
 logger = logging.getLogger(__name__)
 
 WATCHLIST = [
@@ -36,19 +36,16 @@ WATCHLIST = [
     "MOTHERSON", "BOSCHLTD", "BALKRISIND", "EXIDEIND"
 ]
 
-KILL_SWITCH = {"losses": 0, "active": True}
-BATCH_INDEX = [0]
-
-DHAN_SECURITY_IDS = {
-    "RELIANCE": "2885",
-    "TCS": "11536",
-    "HDFCBANK": "1333",
-    "INFY": "1594",
-    "ICICIBANK": "4963"
+KILL_SWITCH = {
+    "losses": 0,
+    "active": True
 }
+
+BATCH_INDEX = [0]
 
 
 def get_dummy_data(symbol):
+
     np.random.seed(42)
 
     dates = pd.date_range(
@@ -71,6 +68,7 @@ def get_dummy_data(symbol):
 
 
 def get_yahoo_data(symbol):
+
     try:
         import urllib.request
         import json
@@ -80,7 +78,10 @@ def get_yahoo_data(symbol):
         end = int(datetime.now().timestamp())
         start = int((datetime.now() - timedelta(days=5)).timestamp())
 
-        url = f"https://query1.finance.yahoo.com/v8/finance/chart/{yahoo_symbol}?interval=15m&period1={start}&period2={end}"
+        url = (
+            f"https://query1.finance.yahoo.com/v8/finance/chart/"
+            f"{yahoo_symbol}?interval=15m&period1={start}&period2={end}"
+        )
 
         req = urllib.request.Request(
             url,
@@ -109,28 +110,39 @@ def get_yahoo_data(symbol):
         if len(df) < 20:
             return get_dummy_data(symbol)
 
-        logger.info(f"Yahoo data: {symbol} — {len(df)} candles")
+        logger.info(f"Yahoo data fetched: {symbol}")
 
         return df
 
     except Exception as e:
-        logger.error(f"Yahoo error {symbol}: {e}")
+
+        logger.error(f"Yahoo fetch error for {symbol}: {e}")
+
         return get_dummy_data(symbol)
 
 
 def save_signal(signal):
+
     conn = get_connection()
 
     if not conn:
         return
 
     try:
+
         cursor = conn.cursor()
 
-        # Save old signal history
         cursor.execute("""
             INSERT INTO signals
-            (symbol, action, entry_price, stop_loss, target, confidence, reason)
+            (
+                symbol,
+                action,
+                entry_price,
+                stop_loss,
+                target,
+                confidence,
+                reason
+            )
             VALUES (%s, %s, %s, %s, %s, %s, %s)
         """, (
             signal['symbol'],
@@ -142,7 +154,6 @@ def save_signal(signal):
             signal['reasons']
         ))
 
-        # Save active signal
         cursor.execute("""
             INSERT INTO active_signals
             (
@@ -177,8 +188,10 @@ def save_signal(signal):
         logger.info(f"Signal saved: {signal['symbol']}")
 
     except Exception as e:
+
         logger.error(f"Save signal error: {e}")
-}")
+
+
 def run_scanner():
 
     expire_old_signals()
@@ -196,18 +209,17 @@ def run_scanner():
 
     if not batch:
         BATCH_INDEX[0] = 0
-        logger.info("Watchlist completed. Resetting.")
+        logger.info("Watchlist completed.")
         return
 
-    logger.info(f"Scanning batch {start}-{end}")
+    logger.info(f"Scanning stocks {start} to {end}")
 
     for symbol in batch:
 
         try:
 
-            # Prevent duplicate signals
             if is_signal_active(symbol):
-                logger.info(f"Skipping duplicate active signal: {symbol}")
+                logger.info(f"Skipping duplicate signal: {symbol}")
                 continue
 
             df = get_yahoo_data(symbol)
@@ -237,45 +249,7 @@ def run_scanner():
                 )
 
         except Exception as e:
-            logger.error(f"Scanner error for {symbol}: {e}")
 
-    BATCH_INDEX[0] = end
-    for symbol in batch:
-
-        try:
-
-            # Prevent duplicate signals
-            if is_signal_active(symbol):
-                logger.info(f"Skipping duplicate active signal: {symbol}")
-                continue
-
-            df = get_yahoo_data(symbol)
-
-            result = analyze_setup(df, symbol)
-
-            if result and result['score'] >= 60:
-
-                logger.info(
-                    f"Signal found: {symbol} | Score: {result['score']}"
-                )
-
-                save_signal(result)
-
-                send_alert(
-                    symbol=result['symbol'],
-                    action="BUY",
-                    entry=result['entry'],
-                    sl=result['sl'],
-                    target1=result['target1'],
-                    target2=result['target2'],
-                    confidence=result['score'],
-                    reason=result['reasons'],
-                    trailing_sl=result.get('trailing_sl'),
-                    quantity=result.get('quantity'),
-                    nifty_trend=result.get('nifty_trend')
-                )
-
-        except Exception as e:
             logger.error(f"Scanner error for {symbol}: {e}")
 
     BATCH_INDEX[0] = end
@@ -291,5 +265,5 @@ def send_test_alert():
         target1=102,
         target2=104,
         confidence=85,
-        reason="PETS System Test"
+        reason="PETS system test"
     )
