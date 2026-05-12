@@ -84,9 +84,8 @@ def detect_market_regime(df):
     avg_atr = df['atr'].rolling(window=20).mean().iloc[-1]
     ema20 = df['ema_20'].iloc[-1]
     ema50 = df['ema_50'].iloc[-1]
-
     if atr > avg_atr * 1.5:
-        return "HIGH_VOLATILITY", 1.0
+        return "HIGH_VOLATILITY", 2.0
     elif ema20 > ema50 and atr > avg_atr:
         return "TRENDING", 1.5
     elif atr < avg_atr * 0.8:
@@ -120,6 +119,7 @@ def calculate_position_size(entry, sl, capital=10000):
 def analyze_setup(df, symbol):
     try:
         if not is_market_hours():
+            logger.info(f"Outside market hours — skipping {symbol}")
             return None
 
         if not check_daily_limit():
@@ -136,7 +136,6 @@ def analyze_setup(df, symbol):
         df = calculate_ema(df, 50)
         df = calculate_atr(df, period=20)
         df = calculate_rsi(df)
-
         df = df.dropna(subset=['atr', 'ema_20', 'ema_50', 'rsi', 'vwap'])
 
         if len(df) < 3:
