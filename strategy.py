@@ -17,7 +17,6 @@ def is_market_hours():
     if ist_hour >= 24:
         ist_hour -= 24
     ist_time = ist_hour * 100 + ist_minute
-    # Best windows: 9:20-10:30 and 13:45-14:45
     return (920 <= ist_time <= 1030) or (1345 <= ist_time <= 1445)
 
 def check_daily_limit():
@@ -62,10 +61,31 @@ def calculate_ema(df, period):
     df[f'ema_{period}'] = df['close'].ewm(span=period, adjust=False).mean()
     return df
 
-def calculate_atr(df, period=14):
-    df['tr'] = np.maximum(df['high'] - df['low'], np.maximum(abs(df['high'] - df['close'].shift(1)), abs(df['low'] - df['close'].shift(1))))
+def calculate_atr(df, period=20):
+    df['tr'] = np.maximum(
+        df['high'] - df['low'],
+        np.maximum(
+            abs(df['high'] - df['close'].shift(1)),
+            abs(df['low'] - df['close'].shift(1))
+        )
+    )
     df['atr'] = df['tr'].rolling(window=period).mean()
     return df
+
+def detect_market_regime(df):
+    atr = df['atr'].iloc[-1]
+    avg_atr = df['atr'].rolling(window=20).mean().iloc[-1]
+    ema20 = df['ema_20'].iloc[-1]
+    ema50 = df['ema_50'].iloc[-1]
+
+    if ema20 > ema50 and atr > avg_atr:
+        return "TRENDING", 1.8
+    elif atr < avg_atr * 0.8:
+        return "SIDEWAYS", 1.2
+    elif atr > avg_atr * 1.5:
+        return "HIGH_VOLATILITY", 2.0
+    else:
+        return "NORMAL", 1.5
 
 def calculate_rsi(df, period=14):
     delta = df['close'].diff()
@@ -79,9 +99,6 @@ def check_volume_spike(df):
     avg_volume = df['volume'].rolling(window=10).mean()
     latest_volume = df['volume'].iloc[-1]
     return latest_volume > (avg_volume.iloc[-1] * 1.5)
-
-def calculate_trailing_sl(entry, atr):
-    return round(entry - (1.5 * atr), 2)
 
 def calculate_position_size(entry, sl, capital=10000):
     risk_amount = capital * 0.01
@@ -97,7 +114,7 @@ def analyze_setup(df, symbol):
             return None
 
         if not check_daily_limit():
-            logger.info("Daily trade limit reached — stopping.")
+            logger.info("Daily trade limit reached.")
             return None
 
         nifty_trend = get_nifty_trend()
@@ -108,46 +125,44 @@ def analyze_setup(df, symbol):
         df = calculate_vwap(df)
         df = calculate_ema(df, 20)
         df = calculate_ema(df, 50)
-        df = calculate_atr(df)
+        df = calculate_atr(df, period=20)
         df = calculate_rsi(df)
 
         latest = df.iloc[-1]
         prev = df.iloc[-2]
 
+        regime, atr_multiplier = detect_market_regime(df)
+
         score = 0
         reasons = []
 
-        # Nifty trend weight
         score += 20
         reasons.append("Nifty OK")
 
-        # VWAP Reclaim
         if prev['close'] < prev['vwap'] and latest['close'] > latest['vwap']:
             score += 15
             reasons.append("VWAP Reclaim")
 
-        # EMA alignment
         if latest['close'] > latest['ema_20'] > latest['ema_50']:
             score += 15
             reasons.append("EMA Bullish")
 
-        # Volume spike
         if check_volume_spike(df):
             score += 20
             reasons.append("Volume Spike")
 
-        # RSI momentum
         if 50 < latest['rsi'] < 70:
             score += 15
             reasons.append("RSI Momentum")
 
         atr = latest['atr']
         entry = latest['close']
-        sl = round(entry - (1.5 * atr), 2)
+        sl = round(entry - (atr_multiplier * atr), 2)
         target1 = round(entry + (entry * 0.02), 2)
         target2 = round(entry + (entry * 0.04), 2)
+        trailing_sl = round(entry - (atr_multiplier * atr), 2)
+
         rr = round((target1 - entry) / (entry - sl), 2) if (entry - sl) > 0 else 0
-        trailing_sl = calculate_trailing_sl(entry, atr)
         quantity = calculate_position_size(entry, sl)
 
         if rr >= 2:
@@ -159,7 +174,7 @@ def analyze_setup(df, symbol):
         else:
             score -= 15
 
-        logger.info(f"Symbol: {symbol} | Score: {score} | T1: {target1} | T2: {target2} | Qty: {quantity}")
+        logger.info(f"Symbol: {symbol} | Score: {score} | Regime: {regime} | ATR mult: {atr_multiplier} | T1: {target1} | Qty: {quantity}")
 
         return {
             "symbol": symbol,
@@ -172,6 +187,7 @@ def analyze_setup(df, symbol):
             "rr": rr,
             "quantity": quantity,
             "nifty_trend": nifty_trend,
+            "regime": regime,
             "reasons": ", ".join(reasons)
         }
 
