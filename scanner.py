@@ -21,19 +21,39 @@ WATCHLIST = [
     "GRASIM", "INDUSINDBK", "BPCL", "IOC", "HINDALCO",
     "VEDL", "UPL", "SHREECEM", "SBILIFE", "HDFCLIFE",
     "DABUR", "MARICO", "COLPAL", "GODREJCP", "PGHH",
-    "MCDOWELL-N", "UNITDSPR", "TRENT", "DMART", "NYKAA",
-    "ZOMATO", "PAYTM", "POLICYBZR", "NAUKRI", "IRCTC",
+    "UNITDSPR", "TRENT", "DMART", "NYKAA",
+    "PAYTM", "POLICYBZR", "NAUKRI", "IRCTC",
     "ABCAPITAL", "MUTHOOTFIN", "CHOLAFIN", "BAJAJHLDNG", "SBICARD",
     "TORNTPHARM", "AUROPHARMA", "ALKEM", "LUPIN", "BIOCON",
     "PIIND", "ATUL", "DEEPAKNTR", "ASTRAL", "SUPREMEIND",
     "VOLTAS", "HAVELLS", "CROMPTON", "POLYCAB", "KEI",
-    "GMRINFRA", "ADANIGREEN", "ADANITRANS", "TATAPOWER", "CESC",
-    "GAIL", "MGL", "IGL", "PETRONET", "CONCOR",
-    "MOTHERSON", "BOSCHLTD", "BALKRISIND", "EXIDEIND", "AMARAJABAT"
+    "ADANIGREEN", "TATAPOWER", "CESC",
+    "GAIL", "IGL", "PETRONET", "CONCOR",
+    "MOTHERSON", "BOSCHLTD", "BALKRISIND", "EXIDEIND"
 ]
 
 KILL_SWITCH = {"losses": 0, "active": True}
 BATCH_INDEX = [0]
+
+DHAN_SECURITY_IDS = {
+    "RELIANCE": "2885", "TCS": "11536", "HDFCBANK": "1333",
+    "INFY": "1594", "ICICIBANK": "4963", "HINDUNILVR": "1394",
+    "ITC": "1660", "SBIN": "3045", "BHARTIARTL": "10604",
+    "KOTAKBANK": "1922", "LT": "11483", "AXISBANK": "5900",
+    "ASIANPAINT": "236", "MARUTI": "10999", "TITAN": "3506",
+    "SUNPHARMA": "3351", "ULTRACEMCO": "11532", "WIPRO": "3787",
+    "NESTLEIND": "17963", "TECHM": "13538", "HCLTECH": "7229",
+    "BAJFINANCE": "317", "BAJAJFINSV": "16675", "NTPC": "11630",
+    "POWERGRID": "14977", "ONGC": "2475", "COALINDIA": "20374",
+    "JSWSTEEL": "11723", "TATASTEEL": "3492", "ADANIENT": "25",
+    "ADANIPORTS": "15083", "DIVISLAB": "10940", "DRREDDY": "881",
+    "CIPLA": "694", "APOLLOHOSP": "157", "EICHERMOT": "910",
+    "HEROMOTOCO": "1348", "BAJAJ-AUTO": "16669", "TATACONSUM": "3432",
+    "BRITANNIA": "547", "GRASIM": "1232", "INDUSINDBK": "5258",
+    "BPCL": "526", "IOC": "1624", "HINDALCO": "1363",
+    "VEDL": "3063", "UPL": "11287", "SBILIFE": "21808",
+    "HDFCLIFE": "467", "IRCTC": "543556"
+}
 
 
 def get_dummy_data(symbol):
@@ -50,37 +70,44 @@ def get_dummy_data(symbol):
     return df
 
 
-def get_live_data(symbol):
+def get_dhan_data(symbol):
     try:
-        from fyers_apiv3 import fyersModel
+        from dhanhq import dhanhq
+        client_id = os.environ.get("DHAN_CLIENT_ID")
+        access_token = os.environ.get("DHAN_ACCESS_TOKEN")
+        dhan = dhanhq(client_id, access_token)
+
+        security_id = DHAN_SECURITY_IDS.get(symbol)
+        if not security_id:
+            return get_yahoo_data(symbol)
+
         today = datetime.now().strftime("%Y-%m-%d")
-        yesterday = (datetime.now() - timedelta(days=5)).strftime("%Y-%m-%d")
-        fyers = fyersModel.FyersModel(
-            client_id=os.environ.get("FYERS_APP_ID"),
-            token=os.environ.get("FYERS_ACCESS_TOKEN"),
-            log_path=""
+        from_date = (datetime.now() - timedelta(days=5)).strftime("%Y-%m-%d")
+
+        response = dhan.historical_daily_data(
+            security_id=security_id,
+            exchange_segment="NSE_EQ",
+            instrument_type="EQUITY",
+            from_date=from_date,
+            to_date=today
         )
-        data = {
-            "symbol": f"NSE:{symbol}-EQ",
-            "resolution": "5",
-            "date_format": "1",
-            "range_from": yesterday,
-            "range_to": today,
-            "cont_flag": "1"
-        }
-        response = fyers.history(data=data)
-        if response['code'] == 200:
-            candles = response['candles']
-            df = pd.DataFrame(candles, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
-            df['timestamp'] = pd.to_datetime(df['timestamp'], unit='s')
-            df.set_index('timestamp', inplace=True)
-            logger.info(f"Fyers live data: {symbol} — {len(df)} candles")
+
+        if response and 'data' in response:
+            data = response['data']
+            df = pd.DataFrame(data)
+            df.rename(columns={
+                'open': 'open', 'high': 'high',
+                'low': 'low', 'close': 'close',
+                'volume': 'volume'
+            }, inplace=True)
+            df.index = pd.to_datetime(df.index) if df.index.dtype != 'datetime64[ns]' else df.index
+            logger.info(f"Dhan data: {symbol} — {len(df)} candles")
             return df
         else:
-            logger.warning(f"Fyers error {symbol}: {response} — using Yahoo")
             return get_yahoo_data(symbol)
+
     except Exception as e:
-        logger.error(f"Fyers error {symbol}: {e}")
+        logger.error(f"Dhan error {symbol}: {e}")
         return get_yahoo_data(symbol)
 
 
@@ -151,9 +178,9 @@ def run_scanner():
 
     for symbol in batch:
         try:
-            df = get_live_data(symbol)
+            df = get_dhan_data(symbol)
             result = analyze_setup(df, symbol)
-            if result and result['score'] >= 65:
+            if result and result['score'] >= 60:
                 logger.info(f"Signal found: {symbol} | Score: {result['score']}")
                 save_signal(result)
                 send_alert(
