@@ -181,6 +181,7 @@ def save_signal(signal):
 
 
 def run_scanner():
+        expire_old_signals()
 
     if not KILL_SWITCH["active"]:
         logger.warning("Kill switch active.")
