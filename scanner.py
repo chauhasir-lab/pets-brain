@@ -6,8 +6,11 @@ from datetime import datetime, timedelta
 
 from strategy import analyze_setup
 from telegram_alert import send_alert
-from database import get_connection, is_signal_active
-
+from database import (
+    get_connection,
+    is_signal_active,
+    expire_old_signals
+)
 logger = logging.getLogger(__name__)
 
 WATCHLIST = [
