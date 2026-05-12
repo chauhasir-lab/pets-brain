@@ -8,3 +8,4 @@ aiohttp==3.9.3
 websocket-client==1.6.1
 fyers-apiv3==3.1.0
 pytz==2024.1
+dhanhq==2.0.0
