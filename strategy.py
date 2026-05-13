@@ -373,31 +373,25 @@ def analyze_setup(df, symbol):
             ]
         )
 
-        if len(df) < 3:
+        if len(df) < 20:
             return None
 
         latest = df.iloc[-2]
 
         prev = df.iloc[-3]
 
-        regime, atr_multiplier = detect_market_regime(df)
-
-        avg_volume = (
-            df['volume']
+        recent_high = (
+            df['high']
             .rolling(window=10)
-            .mean()
-            .iloc[-1]
+            .max()
+            .iloc[-3]
         )
 
-        score = 0
+        structure_breakout = (
+            latest['close'] > recent_high
+        )
 
-        reasons = []
-
-        score += 20
-
-        reasons.append("Nifty OK")
-
-                candle_body = abs(
+        candle_body = abs(
             latest['close'] - latest['open']
         )
 
@@ -418,16 +412,36 @@ def analyze_setup(df, symbol):
             and upper_wick < (0.3 * candle_range)
         )
 
+        regime, atr_multiplier = detect_market_regime(df)
+
+        avg_volume = (
+            df['volume']
+            .rolling(window=10)
+            .mean()
+            .iloc[-1]
+        )
+
+        score = 0
+
+        reasons = []
+
+        score += 20
+
+        reasons.append("Nifty OK")
+
         if (
             prev['close'] < prev['vwap']
             and latest['close'] > latest['vwap']
             and latest['volume'] > avg_volume
             and strong_bullish_candle
+            and structure_breakout
         ):
 
-            score += 15
+            score += 20
 
-            reasons.append("VWAP Reclaim")
+            reasons.append(
+                "Strong VWAP Structure Breakout"
+            )
 
         if latest['close'] > latest['ema_20'] > latest['ema_50']:
 
@@ -441,7 +455,7 @@ def analyze_setup(df, symbol):
 
             reasons.append("Volume Spike")
 
-        if 55 < latest['rsi'] < 80:
+        if 55 < latest['rsi'] < 78:
 
             score += 15
 
