@@ -91,7 +91,7 @@ def get_yahoo_data(symbol):
         yahoo_symbol = f"{symbol}.NS"
 
         end = int(datetime.now().timestamp())
-        start = int((datetime.now() - timedelta(days=5)).timestamp())
+        start = int((datetime.now() - timedelta(days=60)).timestamp())
 
         url = (
             f"https://query1.finance.yahoo.com/v8/finance/chart/"
