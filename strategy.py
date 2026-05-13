@@ -596,4 +596,76 @@ def analyze_setup(df, symbol):
             f"Strategy error for {symbol}: {e}"
         )
 
+        get_stock_personality()
+        def get_sector_strength(symbol):
+
+    try:
+
+        sector = SECTOR_MAP.get(symbol)
+
+        if not sector:
+            return 0
+
+        conn = get_connection()
+
+        if not conn:
+            return 0
+
+        cursor = conn.cursor()
+
+        cursor.execute("""
+            SELECT
+                COUNT(*) FILTER (
+                    WHERE result IN (
+                        'TARGET1_HIT',
+                        'TARGET2_HIT'
+                    )
+                ) as wins,
+
+                COUNT(*) FILTER (
+                    WHERE result = 'SL_HIT'
+                ) as losses
+
+            FROM trade_analytics
+
+            WHERE sector = %s
+        """, (sector,))
+
+        row = cursor.fetchone()
+
+        cursor.close()
+        conn.close()
+
+        if not row:
+            return 0
+
+        wins = row[0] or 0
+        losses = row[1] or 0
+
+        total = wins + losses
+
+        if total < 5:
+            return 0
+
+        win_rate = wins / total
+
+        if win_rate >= 0.7:
+            return 15
+
+        elif win_rate >= 0.6:
+            return 8
+
+        elif win_rate < 0.4:
+            return -10
+
+        return 0
+
+    except Exception as e:
+
+        logger.error(
+            f"Sector strength error: {e}"
+        )
+
+        return 0
+
         return None
