@@ -396,7 +396,7 @@ def close_trade(symbol, result, exit_price=None):
         """, (
             symbol,
             setup_type,
-            "NORMAL",
+            setup_type,
             result,
             entry_price,
             exit_price,
