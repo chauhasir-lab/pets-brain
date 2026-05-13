@@ -3,18 +3,8 @@ import numpy as np
 import logging
 from datetime import datetime, timedelta
 
-from strategy import (
-    analyze_setup,
-    calculate_rsi
-)
-
-from telegram_alert import (
-    send_alert,
-    send_target_hit,
-    send_sl_hit,
-    send_trade_update
-)
-
+from strategy import analyze_setup, calculate_rsi
+from telegram_alert import send_alert, send_target_hit, send_sl_hit, send_trade_update
 from database import (
     get_connection,
     is_signal_active,
@@ -50,25 +40,14 @@ WATCHLIST = [
     "MOTHERSON", "BOSCHLTD", "BALKRISIND", "EXIDEIND"
 ]
 
-KILL_SWITCH = {
-    "losses": 0,
-    "active": True
-}
-
+KILL_SWITCH = {"losses": 0, "active": True}
 BATCH_INDEX = [0]
-
-SCAN_LOCK = {
-    "running": False
-}
+SCAN_LOCK = {"running": False}
 
 
 def get_dummy_data(symbol):
     np.random.seed(42)
-    dates = pd.date_range(
-        end=pd.Timestamp.now(),
-        periods=50,
-        freq='15min'
-    )
+    dates = pd.date_range(end=pd.Timestamp.now(), periods=50, freq='15min')
     close = np.random.uniform(100, 500, 50)
     df = pd.DataFrame({
         'open': close * np.random.uniform(0.99, 1.01, 50),
@@ -84,19 +63,20 @@ def get_yahoo_data(symbol):
     try:
         import urllib.request
         import json
+
         yahoo_symbol = f"{symbol}.NS"
         end = int(datetime.now().timestamp())
         start = int((datetime.now() - timedelta(days=60)).timestamp())
+
         url = (
             f"https://query1.finance.yahoo.com/v8/finance/chart/"
             f"{yahoo_symbol}?interval=15m&period1={start}&period2={end}"
         )
-        req = urllib.request.Request(
-            url,
-            headers={'User-Agent': 'Mozilla/5.0'}
-        )
+
+        req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
         response = urllib.request.urlopen(req, timeout=10)
         data = json.loads(response.read())
+
         result = data['chart']['result'][0]
         timestamps = result['timestamp']
         ohlcv = result['indicators']['quote'][0]
@@ -108,10 +88,13 @@ def get_yahoo_data(symbol):
             'close': ohlcv['close'],
             'volume': ohlcv['volume']
         }, index=pd.to_datetime(timestamps, unit='s'))
+
         df.dropna(inplace=True)
 
         if len(df) < 20:
             return get_dummy_data(symbol)
+
+        logger.info(f"Yahoo data fetched: {symbol} — {len(df)} candles")
         return df
 
     except Exception as e:
@@ -125,13 +108,15 @@ def save_signal(signal):
         return
     try:
         cursor = conn.cursor()
+
         cursor.execute("""
             INSERT INTO signals
             (symbol, action, entry_price, stop_loss, target, confidence, reason)
             VALUES (%s, %s, %s, %s, %s, %s, %s)
         """, (
-            signal['symbol'], "BUY", signal['entry'], signal['sl'],
-            signal['target1'], signal['score'], signal['reasons']
+            signal['symbol'], "BUY", signal['entry'],
+            signal['sl'], signal['target1'],
+            signal['score'], signal['reasons']
         ))
 
         cursor.execute("""
@@ -139,13 +124,16 @@ def save_signal(signal):
             (symbol, status, entry_price, stop_loss, target1, target2, score, rr, quantity)
             VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
         """, (
-            signal['symbol'], 'NEW', signal['entry'], signal['sl'],
-            signal['target1'], signal['target2'], signal['score'],
-            signal['rr'], signal['quantity']
+            signal['symbol'], 'NEW', signal['entry'],
+            signal['sl'], signal['target1'], signal['target2'],
+            signal['score'], signal['rr'], signal['quantity']
         ))
+
         conn.commit()
         cursor.close()
         conn.close()
+        logger.info(f"Signal saved: {signal['symbol']}")
+
     except Exception as e:
         logger.error(f"Save signal error: {e}")
 
@@ -154,20 +142,22 @@ def evaluate_open_positions():
     trades = get_active_bought_trades()
     if not trades:
         return
+
     logger.info(f"Monitoring {len(trades)} active trades")
 
     for trade in trades:
         try:
-            (symbol, entry_price, stop_loss, target1, target2, 
+            (symbol, entry_price, stop_loss, target1, target2,
              quantity, rr, score, signal_time, setup_type) = trade
 
             df = get_yahoo_data(symbol)
-            if df is None or len(df) < 50:
+            if df is None or len(df) < 20:
                 continue
 
             current_price = float(df['close'].iloc[-1])
             ema20 = df['close'].ewm(span=20, adjust=False).mean().iloc[-1]
-            rsi = calculate_rsi(df)['rsi'].iloc[-1]
+            rsi_df = calculate_rsi(df)
+            rsi = rsi_df['rsi'].iloc[-1]
 
             # TARGET 2 HIT
             if current_price >= float(target2):
@@ -186,7 +176,7 @@ def evaluate_open_positions():
                 close_trade(symbol, "SL_HIT", current_price)
                 continue
 
-            # Trailing Logic
+            # TRAILING SL
             profit_move = current_price - float(entry_price)
             initial_risk = float(entry_price) - float(stop_loss)
 
@@ -204,7 +194,7 @@ def evaluate_open_positions():
                 send_trade_update(symbol, f"⚠️ MOMENTUM WEAKENING\nStock: {symbol}\nEMA20/RSI weakness detected.")
 
         except Exception as e:
-            logger.error(f"Trade monitor error: {e}")
+            logger.error(f"Trade monitor error for {symbol}: {e}")
 
 
 def run_scanner():
@@ -213,6 +203,7 @@ def run_scanner():
         return
 
     SCAN_LOCK["running"] = True
+
     try:
         expire_old_signals()
         evaluate_open_positions()
@@ -228,7 +219,7 @@ def run_scanner():
 
         if not batch:
             BATCH_INDEX[0] = 0
-            logger.info("Watchlist completed.")
+            logger.info("Watchlist completed. Resetting.")
             return
 
         logger.info(f"Scanning stocks {start} to {end}")
@@ -244,12 +235,7 @@ def run_scanner():
 
                 if result:
                     logger.info(f"Signal found: {symbol} | Score: {result['score']}")
-                    
-                    # FIXED INDENTATION HERE
                     save_signal(result)
-
-                    logger.info(f"SIGNAL DETAILS\nSymbol: {result['symbol']}\nRR: {result['rr']}\nScore: {result['score']}")
-
                     send_alert(
                         symbol=result['symbol'],
                         action="BUY",
@@ -263,10 +249,12 @@ def run_scanner():
                         quantity=result.get('quantity'),
                         nifty_trend=result.get('nifty_trend')
                     )
+
             except Exception as e:
                 logger.error(f"Scanner error for {symbol}: {e}")
 
         BATCH_INDEX[0] = end
+
     finally:
         SCAN_LOCK["running"] = False
 
