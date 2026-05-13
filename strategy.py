@@ -364,7 +364,7 @@ def analyze_setup(df, symbol):
 
         # HARD FILTERS
         if latest['volume'] < avg_volume or latest['close'] < latest['vwap'] or \
-           latest['ema_20'] < latest['ema_50'] or rr < 1.8 or latest['rsi'] > 78 or score < 60:
+           latest['ema_20'] < latest['ema_50'] or rr < 1.8 or latest['rsi'] > 78 or score < 65:
             return None
 
         logger.info(f"{symbol} | Score={score} | Regime={regime} | RR={rr}")
