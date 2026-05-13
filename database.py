@@ -404,6 +404,7 @@ def close_trade(symbol, result, exit_price=None):
             SET status = %s,
                 sold = TRUE,
                 last_updated = NOW()
+                cooldown_until = NOW() + INTERVAL '45 minutes'
             WHERE symbol = %s
             AND status = 'BOUGHT'
         """, (result, symbol))
