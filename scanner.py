@@ -3,7 +3,10 @@ import numpy as np
 import logging
 from datetime import datetime, timedelta
 
-from strategy import analyze_setup
+from strategy import (
+    analyze_setup,
+    calculate_rsi
+)
 
 from telegram_alert import (
     send_alert,
@@ -91,7 +94,10 @@ def get_yahoo_data(symbol):
         yahoo_symbol = f"{symbol}.NS"
 
         end = int(datetime.now().timestamp())
-        start = int((datetime.now() - timedelta(days=60)).timestamp())
+
+        start = int(
+            (datetime.now() - timedelta(days=60)).timestamp()
+        )
 
         url = (
             f"https://query1.finance.yahoo.com/v8/finance/chart/"
@@ -204,7 +210,7 @@ def save_signal(signal):
         logger.error(f"Save signal error: {e}")
 
 
-def monitor_active_trades():
+def evaluate_open_positions():
 
     trades = get_active_bought_trades()
 
@@ -217,55 +223,139 @@ def monitor_active_trades():
 
         try:
 
-            symbol = trade[0]
-            entry = float(trade[1])
-            sl = float(trade[2])
-            target1 = float(trade[3])
-            target2 = float(trade[4])
+            (
+                symbol,
+                entry_price,
+                stop_loss,
+                target1,
+                target2,
+                quantity,
+                rr,
+                score,
+                signal_time,
+                setup_type
+            ) = trade
 
             df = get_yahoo_data(symbol)
 
-            current_price = float(df['close'].iloc[-1])
-
-            # STOP LOSS HIT
-            if current_price <= sl:
-
-                send_sl_hit(symbol, sl, current_price)
-
-                close_trade(symbol, "SL_HIT")
-
+            if df is None or len(df) < 50:
                 continue
 
+            current_price = float(df['close'].iloc[-1])
+
+            ema20 = (
+                df['close']
+                .ewm(span=20, adjust=False)
+                .mean()
+                .iloc[-1]
+            )
+
+            rsi = calculate_rsi(df)['rsi'].iloc[-1]
+
             # TARGET 2 HIT
-            if current_price >= target2:
+            if current_price >= float(target2):
 
-                send_target_hit(symbol, target2, current_price)
+                send_trade_update(
+                    symbol,
+                    f"""
+🚀 TARGET 2 HIT
 
-                close_trade(symbol, "TARGET2_HIT")
+Stock: {symbol}
+
+CMP: ₹{round(current_price, 2)}
+
+Full target achieved.
+"""
+                )
+
+                close_trade(
+                    symbol,
+                    "TARGET2_HIT",
+                    current_price
+                )
 
                 continue
 
             # TARGET 1 HIT
-            if current_price >= target1:
+            if current_price >= float(target1):
 
-                note = (
-                    f"Target 1 reached near ₹{target1}. "
-                    f"Consider partial booking."
+                send_trade_update(
+                    symbol,
+                    f"""
+🎯 TARGET 1 HIT
+
+Stock: {symbol}
+
+CMP: ₹{round(current_price, 2)}
+
+Book partial profit.
+Trail remaining quantity.
+"""
                 )
 
-                send_target_hit(symbol, target1, current_price)
+                update_trade_note(
+                    symbol,
+                    "Target 1 achieved."
+                )
 
-                update_trade_note(symbol, note)
+            # STOP LOSS HIT
+            if current_price <= float(stop_loss):
+
+                send_trade_update(
+                    symbol,
+                    f"""
+❌ STOP LOSS HIT
+
+Stock: {symbol}
+
+CMP: ₹{round(current_price, 2)}
+
+Trade closed.
+"""
+                )
+
+                close_trade(
+                    symbol,
+                    "SL_HIT",
+                    current_price
+                )
+
+                continue
+
+            # Momentum weakness
+            if current_price < ema20 or rsi < 48:
+
+                send_trade_update(
+                    symbol,
+                    f"""
+⚠️ MOMENTUM WEAKENING
+
+Stock: {symbol}
+
+CMP: ₹{round(current_price, 2)}
+
+EMA20 weakness detected.
+RSI losing strength.
+
+Consider tightening SL.
+"""
+                )
 
         except Exception as e:
 
-            logger.error(f"Trade monitor error: {e}")
+            logger.error(
+                f"Trade monitor error: {e}"
+            )
 
 
 def run_scanner():
 
     if SCAN_LOCK["running"]:
-        logger.warning("Scanner already running. Skipping.")
+
+        logger.warning(
+            "Scanner already running. Skipping."
+        )
+
         return
 
     SCAN_LOCK["running"] = True
@@ -274,42 +364,59 @@ def run_scanner():
 
         expire_old_signals()
 
-        monitor_active_trades()
+        evaluate_open_positions()
 
         if not KILL_SWITCH["active"]:
-            logger.warning("Kill switch active.")
+
+            logger.warning(
+                "Kill switch active."
+            )
+
             return
 
         batch_size = 10
 
         start = BATCH_INDEX[0]
+
         end = start + batch_size
 
         batch = WATCHLIST[start:end]
 
         if not batch:
+
             BATCH_INDEX[0] = 0
-            logger.info("Watchlist completed.")
+
+            logger.info(
+                "Watchlist completed."
+            )
+
             return
 
-        logger.info(f"Scanning stocks {start} to {end}")
+        logger.info(
+            f"Scanning stocks {start} to {end}"
+        )
 
         for symbol in batch:
 
             try:
 
                 if is_signal_active(symbol):
-                    logger.info(f"Skipping duplicate signal: {symbol}")
+
+                    logger.info(
+                        f"Skipping duplicate signal: {symbol}"
+                    )
+
                     continue
 
                 df = get_yahoo_data(symbol)
 
                 result = analyze_setup(df, symbol)
 
-                if result and result['score'] >= 60:
+                if result:
 
                     logger.info(
-                        f"Signal found: {symbol} | Score: {result['score']}"
+                        f"Signal found: {symbol} | "
+                        f"Score: {result['score']}"
                     )
 
                     save_signal(result)
@@ -330,7 +437,9 @@ def run_scanner():
 
             except Exception as e:
 
-                logger.error(f"Scanner error for {symbol}: {e}")
+                logger.error(
+                    f"Scanner error for {symbol}: {e}"
+                )
 
         BATCH_INDEX[0] = end
 
