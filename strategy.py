@@ -343,6 +343,78 @@ def get_stock_personality(symbol, regime):
         return 0
 
 
+def get_sector_strength(symbol):
+
+    try:
+
+        sector = SECTOR_MAP.get(symbol)
+
+        if not sector:
+            return 0
+
+        conn = get_connection()
+
+        if not conn:
+            return 0
+
+        cursor = conn.cursor()
+
+        cursor.execute("""
+            SELECT
+                COUNT(*) FILTER (
+                    WHERE result IN (
+                        'TARGET1_HIT',
+                        'TARGET2_HIT'
+                    )
+                ) as wins,
+
+                COUNT(*) FILTER (
+                    WHERE result = 'SL_HIT'
+                ) as losses
+
+            FROM trade_analytics
+
+            WHERE sector = %s
+        """, (sector,))
+
+        row = cursor.fetchone()
+
+        cursor.close()
+        conn.close()
+
+        if not row:
+            return 0
+
+        wins = row[0] or 0
+        losses = row[1] or 0
+
+        total = wins + losses
+
+        if total < 5:
+            return 0
+
+        win_rate = wins / total
+
+        if win_rate >= 0.7:
+            return 15
+
+        elif win_rate >= 0.6:
+            return 8
+
+        elif win_rate < 0.4:
+            return -10
+
+        return 0
+
+    except Exception as e:
+
+        logger.error(
+            f"Sector strength error: {e}"
+        )
+
+        return 0
+
+
 def analyze_setup(df, symbol):
 
     try:
@@ -486,6 +558,8 @@ def analyze_setup(df, symbol):
             regime
         )
 
+        score += personality_score
+
         if personality_score > 0:
 
             reasons.append(
@@ -498,7 +572,23 @@ def analyze_setup(df, symbol):
                 f"Weak History {personality_score}"
             )
 
-        score += personality_score
+        sector_score = get_sector_strength(
+            symbol
+        )
+
+        score += sector_score
+
+        if sector_score > 0:
+
+            reasons.append(
+                f"Strong Sector +{sector_score}"
+            )
+
+        elif sector_score < 0:
+
+            reasons.append(
+                f"Weak Sector {sector_score}"
+            )
 
         atr = latest['atr']
 
@@ -595,77 +685,5 @@ def analyze_setup(df, symbol):
         logger.error(
             f"Strategy error for {symbol}: {e}"
         )
-
-        get_stock_personality()
-        def get_sector_strength(symbol):
-
-    try:
-
-        sector = SECTOR_MAP.get(symbol)
-
-        if not sector:
-            return 0
-
-        conn = get_connection()
-
-        if not conn:
-            return 0
-
-        cursor = conn.cursor()
-
-        cursor.execute("""
-            SELECT
-                COUNT(*) FILTER (
-                    WHERE result IN (
-                        'TARGET1_HIT',
-                        'TARGET2_HIT'
-                    )
-                ) as wins,
-
-                COUNT(*) FILTER (
-                    WHERE result = 'SL_HIT'
-                ) as losses
-
-            FROM trade_analytics
-
-            WHERE sector = %s
-        """, (sector,))
-
-        row = cursor.fetchone()
-
-        cursor.close()
-        conn.close()
-
-        if not row:
-            return 0
-
-        wins = row[0] or 0
-        losses = row[1] or 0
-
-        total = wins + losses
-
-        if total < 5:
-            return 0
-
-        win_rate = wins / total
-
-        if win_rate >= 0.7:
-            return 15
-
-        elif win_rate >= 0.6:
-            return 8
-
-        elif win_rate < 0.4:
-            return -10
-
-        return 0
-
-    except Exception as e:
-
-        logger.error(
-            f"Sector strength error: {e}"
-        )
-
-        return 0
 
         return None
