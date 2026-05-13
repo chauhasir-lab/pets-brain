@@ -30,7 +30,7 @@ SECTOR_MAP = {
     "RELIANCE": "ENERGY",
     "ONGC": "ENERGY",
     
-    "LT": "INFRA"  # <--- Fix 1: Added LT to INFRA sector
+    "LT": "INFRA"
 }
 
 
@@ -141,25 +141,53 @@ def check_volume_spike(df):
     return latest_volume > (avg_volume.iloc[-1] * 1.5)
 
 
-def calculate_position_size(entry, sl, capital=10000):
-    # Fix 2: Institutional Position Sizing Safeguard
-    risk_amount = capital * RISK_PER_TRADE
-    risk_per_share = entry - sl
+def calculate_position_size(
+    entry,
+    sl,
+    capital=10000
+):
+    try:
+        # Max 25% of capital per trade
+        max_capital_allocation = capital * 0.25
 
-    # Safeguard: Minimum SL distance of 0.5% to prevent quantity explosion
-    min_risk_per_share = entry * 0.005
-    if risk_per_share < min_risk_per_share:
-        logger.warning(f"Risk per share ({risk_per_share}) too small. Applying 0.5% safeguard.")
-        risk_per_share = min_risk_per_share
+        # Amount to risk (2% of total capital)
+        risk_amount = capital * RISK_PER_TRADE
 
-    if risk_per_share <= 0:
-        return 0
+        # Absolute difference between entry and sl
+        risk_per_share = abs(entry - sl)
 
-    risk_qty = int(risk_amount / risk_per_share)
-    capital_qty = int(capital / entry)
+        # Institutional safeguard: Minimum 0.5% risk distance
+        min_risk_distance = entry * 0.005
 
-    qty = min(risk_qty, capital_qty)
-    return max(qty, 1)
+        if risk_per_share < min_risk_distance:
+            risk_per_share = min_risk_distance
+
+        # Quantity based on risk
+        risk_qty = int(
+            risk_amount / risk_per_share
+        )
+
+        # Quantity based on capital allocation limit
+        capital_qty = int(
+            max_capital_allocation / entry
+        )
+
+        # Final qty is the lower of the two
+        qty = min(
+            risk_qty,
+            capital_qty
+        )
+
+        # Ensure at least 1 share
+        qty = max(qty, 1)
+
+        return qty
+
+    except Exception as e:
+        logger.error(
+            f"Position sizing error: {e}"
+        )
+        return 1
 
 
 def detect_market_regime(df):
