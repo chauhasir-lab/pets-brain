@@ -27,8 +27,6 @@ def get_updates(offset=None):
         params["offset"] = offset
     response = requests.get(url, params=params)
     return response.json()
-
-
 def handle_command(command):
 
     from database import (
@@ -68,7 +66,9 @@ def handle_command(command):
         conn = get_connection()
 
         if not conn:
+
             send_message("❌ Database error.")
+
             return
 
         try:
@@ -95,7 +95,9 @@ def handle_command(command):
             conn.close()
 
             if not rows:
+
                 send_message("No signals found.")
+
                 return
 
             msg = "*Last 5 Signals:*\n\n"
@@ -117,7 +119,8 @@ def handle_command(command):
 
             send_message(f"Error: {e}")
 
-        elif base == "/bought":
+    # BOUGHT
+    elif base == "/bought":
 
         if len(parts) < 2:
 
@@ -172,13 +175,16 @@ def handle_command(command):
         except Exception as e:
 
             send_message(f"Error: {e}")
+
     # SOLD
     elif base == "/sold":
 
         if len(parts) < 2:
+
             send_message(
                 "Usage:\n/sold SYMBOL"
             )
+
             return
 
         symbol = parts[1].upper()
@@ -196,10 +202,12 @@ def handle_command(command):
     elif base == "/feedback":
 
         if len(parts) < 3:
+
             send_message(
                 "Usage:\n"
                 "/feedback SYMBOL your_note"
             )
+
             return
 
         symbol = parts[1].upper()
@@ -213,13 +221,6 @@ def handle_command(command):
 
         send_message(
             f"🧠 Feedback saved for {symbol}"
-        )
-
-    # IGNORE
-    elif base == "/ignore":
-
-        send_message(
-            "❌ Signal ignored."
         )
 
     # HELP
@@ -244,6 +245,7 @@ def handle_command(command):
         send_message(
             "Unknown command.\nUse /help"
         )
+
 
 def start_bot_listener():
     logger.info("Bot listener started.")
