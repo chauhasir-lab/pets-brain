@@ -296,11 +296,8 @@ def close_trade(symbol, result, exit_price=None):
 
         cursor = conn.cursor()
 
-        # Fetch trade data
         cursor.execute("""
             SELECT
-                symbol,
-                setup_type,
                 entry_price,
                 stop_loss,
                 target1,
@@ -309,54 +306,70 @@ def close_trade(symbol, result, exit_price=None):
                 rr,
                 score,
                 signal_time,
-                notes
+                setup_type
             FROM active_signals
             WHERE symbol = %s
-            AND status = 'BOUGHT'
+            AND status IN (
+                'BOUGHT',
+                'ACTIVE',
+                'NEW'
+            )
+            ORDER BY signal_time DESC
             LIMIT 1
         """, (symbol,))
 
         trade = cursor.fetchone()
 
         if not trade:
+
             cursor.close()
             conn.close()
+
             return
 
         (
-            symbol,
-            setup_type,
             entry_price,
             stop_loss,
             target1,
             target2,
             quantity,
             rr,
-            confidence,
+            score,
             signal_time,
-            notes
+            setup_type
         ) = trade
 
-        if exit_price is None:
-            exit_price = entry_price
-
-        pnl = (
-            (float(exit_price) - float(entry_price))
-            * int(quantity)
+        holding_minutes = int(
+            (
+                datetime.utcnow() - signal_time
+            ).total_seconds() / 60
         )
 
-        holding_minutes = 0
+        pnl = 0
+
+        if exit_price:
+
+            pnl = round(
+                (
+                    float(exit_price)
+                    - float(entry_price)
+                ) * int(quantity),
+                2
+            )
+
+        # Detect sector
+        sector = None
 
         try:
-            from datetime import datetime
 
-            holding_minutes = int(
-                (datetime.utcnow() - signal_time).total_seconds() / 60
-            )
-        except Exception:
+            from strategy import SECTOR_MAP
+
+            sector = SECTOR_MAP.get(symbol)
+
+        except:
             pass
 
-        # Save analytics
+        # Insert analytics
         cursor.execute("""
             INSERT INTO trade_analytics
             (
@@ -374,16 +387,16 @@ def close_trade(symbol, result, exit_price=None):
                 rr,
                 holding_minutes,
                 confidence,
-                notes
+                sector
             )
-            VALUES
-            (%s, %s, %s, %s, %s, %s, %s,
-             %s, %s, %s, %s, %s, %s,
-             %s, %s)
+            VALUES (
+                %s,%s,%s,%s,%s,%s,%s,%s,
+                %s,%s,%s,%s,%s,%s,%s
+            )
         """, (
             symbol,
             setup_type,
-            "UNKNOWN",
+            "NORMAL",
             result,
             entry_price,
             exit_price,
@@ -394,33 +407,42 @@ def close_trade(symbol, result, exit_price=None):
             pnl,
             rr,
             holding_minutes,
-            confidence,
-            notes
+            score,
+            sector
         ))
 
-        # Close active trade
+        # Close signal
         cursor.execute("""
             UPDATE active_signals
             SET status = %s,
                 sold = TRUE,
-                last_updated = NOW()
+                last_updated = NOW(),
                 cooldown_until = NOW() + INTERVAL '45 minutes'
             WHERE symbol = %s
-            AND status = 'BOUGHT'
-        """, (result, symbol))
+            AND status IN (
+                'BOUGHT',
+                'ACTIVE',
+                'NEW'
+            )
+        """, (
+            result,
+            symbol
+        ))
 
         conn.commit()
 
         cursor.close()
         conn.close()
 
-        logger.info(f"Trade closed and saved: {symbol}")
+        logger.info(
+            f"Trade closed: {symbol} | {result}"
+        )
 
     except Exception as e:
 
-        logger.error(f"Close trade error: {e}")
-
-
+        logger.error(
+            f"Close trade error: {e}"
+        )
 def update_trade_note(symbol, note):
 
     try:
