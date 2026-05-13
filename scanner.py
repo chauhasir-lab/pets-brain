@@ -5,7 +5,7 @@ from datetime import datetime, timedelta
 from strategy import (
     analyze_setup,
     calculate_rsi,
-    is_market_open
+    is_market_hours
 )
 
 from telegram_alert import (
@@ -397,7 +397,7 @@ def run_scanner():
 
         return
 
-    if not is_market_open():
+    if not is_market_hours():
 
         logger.info(
             "Market closed. Scanner sleeping."
