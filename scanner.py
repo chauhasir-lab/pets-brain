@@ -13,6 +13,8 @@ from telegram_alert import (
     send_trade_update
 )
 
+from dhan_data import get_dhan_data
+
 from database import (
     get_connection,
     is_signal_active,
