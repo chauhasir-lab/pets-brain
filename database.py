@@ -448,3 +448,36 @@ def update_trade_note(symbol, note):
     except Exception as e:
 
         logger.error(f"Trade note update error: {e}")
+def update_stop_loss(symbol, new_sl):
+
+    try:
+
+        conn = get_connection()
+
+        if not conn:
+            return
+
+        cursor = conn.cursor()
+
+        cursor.execute("""
+            UPDATE active_signals
+            SET stop_loss = %s,
+                last_updated = NOW()
+            WHERE symbol = %s
+            AND status = 'BOUGHT'
+        """, (new_sl, symbol))
+
+        conn.commit()
+
+        cursor.close()
+        conn.close()
+
+        logger.info(
+            f"SL updated for {symbol}: {new_sl}"
+        )
+
+    except Exception as e:
+
+        logger.error(
+            f"SL update error: {e}"
+        )
