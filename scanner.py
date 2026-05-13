@@ -480,6 +480,16 @@ def run_scanner():
                     )
 
                     save_signal(result)
+                                        logger.info(
+                        f"""
+SIGNAL DETAILS
+
+Symbol: {result['symbol']}
+Regime: {result['regime']}
+RR: {result['rr']}
+Score: {result['score']}
+"""
+                    )
 
                     send_alert(
                         symbol=result['symbol'],
