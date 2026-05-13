@@ -117,13 +117,14 @@ def handle_command(command):
 
             send_message(f"Error: {e}")
 
-    # BOUGHT
-    elif base == "/bought":
+        elif base == "/bought":
 
         if len(parts) < 2:
+
             send_message(
                 "Usage:\n/bought SYMBOL"
             )
+
             return
 
         symbol = parts[1].upper()
@@ -131,7 +132,9 @@ def handle_command(command):
         conn = get_connection()
 
         if not conn:
+
             send_message("DB error.")
+
             return
 
         try:
@@ -147,19 +150,28 @@ def handle_command(command):
                 AND status = 'NEW'
             """, (symbol,))
 
+            updated_rows = cursor.rowcount
+
             conn.commit()
 
             cursor.close()
             conn.close()
 
-            send_message(
-                f"✅ Trade marked BOUGHT:\n{symbol}"
-            )
+            if updated_rows == 0:
+
+                send_message(
+                    f"❌ No active NEW trade found for {symbol}"
+                )
+
+            else:
+
+                send_message(
+                    f"✅ Trade marked BOUGHT:\n{symbol}"
+                )
 
         except Exception as e:
 
             send_message(f"Error: {e}")
-
     # SOLD
     elif base == "/sold":
 
