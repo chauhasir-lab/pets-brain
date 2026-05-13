@@ -479,8 +479,9 @@ def run_scanner():
                         f"Score: {result['score']}"
                     )
 
-                    save_signal(result)
-                                        logger.info(
+                                        save_signal(result)
+
+                    logger.info(
                         f"""
 SIGNAL DETAILS
 
@@ -504,7 +505,6 @@ Score: {result['score']}
                         quantity=result.get('quantity'),
                         nifty_trend=result.get('nifty_trend')
                     )
-
             except Exception as e:
 
                 logger.error(
