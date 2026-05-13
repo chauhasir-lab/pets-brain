@@ -245,7 +245,7 @@ def evaluate_open_positions():
                 setup_type
             ) = trade
 
-            df = get_yahoo_data(symbol)
+            df = get_dhan_data(symbol)
 
             if df is None:
                 continue
