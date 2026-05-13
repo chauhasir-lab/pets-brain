@@ -249,7 +249,7 @@ def detect_market_regime(df):
     return "NORMAL", 1.3
 
 
-def get_stock_personality(symbol):
+def get_stock_personality(symbol, regime):
 
     try:
 
@@ -276,7 +276,11 @@ def get_stock_personality(symbol):
             FROM trade_analytics
 
             WHERE symbol = %s
-        """, (symbol,))
+            AND (
+                market_regime = %s
+                OR market_regime IS NULL
+            )
+        """, (symbol, regime))
 
         row = cursor.fetchone()
 
@@ -296,23 +300,25 @@ def get_stock_personality(symbol):
 
         win_rate = wins / total
 
-        if win_rate >= 0.7:
-            return 15
+        if win_rate >= 0.75:
+            return 20
 
-        elif win_rate >= 0.6:
-            return 10
+        elif win_rate >= 0.65:
+            return 12
 
-        elif win_rate < 0.4:
-            return -15
+        elif win_rate < 0.35:
+            return -20
 
-        elif win_rate < 0.5:
-            return -10
+        elif win_rate < 0.45:
+            return -12
 
         return 0
 
     except Exception as e:
 
-        logger.error(f"Stock personality error: {e}")
+        logger.error(
+            f"Stock personality error: {e}"
+        )
 
         return 0
 
@@ -419,8 +425,10 @@ def analyze_setup(df, symbol):
 
             reasons.append("RSI Momentum")
 
-        # Personality Intelligence
-        personality_score = get_stock_personality(symbol)
+        personality_score = get_stock_personality(
+            symbol,
+            regime
+        )
 
         if personality_score > 0:
 
