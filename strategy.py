@@ -491,6 +491,27 @@ def analyze_setup(df, symbol):
 
             score -= 10
 
+        # HARD QUALITY FILTERS
+
+        if latest['volume'] < avg_volume:
+            return None
+
+        if latest['close'] < latest['vwap']:
+            return None
+
+        if latest['ema_20'] < latest['ema_50']:
+            return None
+
+        if rr < 1.8:
+            return None
+
+        if latest['rsi'] > 78:
+            return None
+
+        # Institutional quality threshold
+        if score < 70:
+            return None
+
         logger.info(
             f"{symbol} | "
             f"Score={score} | "
