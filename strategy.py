@@ -376,9 +376,9 @@ def analyze_setup(df, symbol):
         if len(df) < 3:
             return None
 
-        latest = df.iloc[-1]
+        latest = df.iloc[-2]
 
-        prev = df.iloc[-2]
+        prev = df.iloc[-3]
 
         regime, atr_multiplier = detect_market_regime(df)
 
