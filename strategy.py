@@ -397,10 +397,32 @@ def analyze_setup(df, symbol):
 
         reasons.append("Nifty OK")
 
+                candle_body = abs(
+            latest['close'] - latest['open']
+        )
+
+        candle_range = (
+            latest['high'] - latest['low']
+        )
+
+        upper_wick = (
+            latest['high']
+            - max(
+                latest['close'],
+                latest['open']
+            )
+        )
+
+        strong_bullish_candle = (
+            candle_body > (0.5 * candle_range)
+            and upper_wick < (0.3 * candle_range)
+        )
+
         if (
             prev['close'] < prev['vwap']
             and latest['close'] > latest['vwap']
             and latest['volume'] > avg_volume
+            and strong_bullish_candle
         ):
 
             score += 15
