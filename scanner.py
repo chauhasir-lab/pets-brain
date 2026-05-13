@@ -21,7 +21,8 @@ from database import (
     expire_old_signals,
     get_active_bought_trades,
     close_trade,
-    update_trade_note
+    update_trade_note,
+    update_stop_loss
 )
 
 logger = logging.getLogger(__name__)
@@ -337,6 +338,11 @@ Trade closed.
 
                 new_sl = float(entry_price)
 
+                update_stop_loss(
+                    symbol,
+                    new_sl
+                )
+
                 send_trade_update(
                     symbol,
                     f"""
@@ -357,6 +363,11 @@ SL shifted to breakeven:
                 new_sl = (
                     float(entry_price)
                     + initial_risk
+                )
+
+                update_stop_loss(
+                    symbol,
+                    new_sl
                 )
 
                 send_trade_update(
@@ -397,7 +408,6 @@ Consider tightening SL.
             logger.error(
                 f"Trade monitor error: {e}"
             )
-
 def run_scanner():
 
     if SCAN_LOCK["running"]:
