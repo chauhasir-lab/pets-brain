@@ -322,6 +322,57 @@ Trade closed.
 
                 continue
 
+            # Dynamic Trailing Logic
+
+            profit_move = (
+                current_price - float(entry_price)
+            )
+
+            initial_risk = (
+                float(entry_price) - float(stop_loss)
+            )
+
+            # Move SL to breakeven
+            if profit_move >= initial_risk:
+
+                new_sl = float(entry_price)
+
+                send_trade_update(
+                    symbol,
+                    f"""
+🔒 TRAILING STOP UPDATED
+
+Stock: {symbol}
+
+CMP: ₹{round(current_price, 2)}
+
+SL shifted to breakeven:
+₹{round(new_sl, 2)}
+"""
+                )
+
+            # Strong profit protection
+            if profit_move >= (2 * initial_risk):
+
+                new_sl = (
+                    float(entry_price)
+                    + initial_risk
+                )
+
+                send_trade_update(
+                    symbol,
+                    f"""
+🚀 PROFIT LOCK ACTIVATED
+
+Stock: {symbol}
+
+CMP: ₹{round(current_price, 2)}
+
+Trailing SL:
+₹{round(new_sl, 2)}
+"""
+                )
+
             # Momentum weakness
             if current_price < ema20 or rsi < 48:
 
@@ -346,7 +397,6 @@ Consider tightening SL.
             logger.error(
                 f"Trade monitor error: {e}"
             )
-
 
 def run_scanner():
 
