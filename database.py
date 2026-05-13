@@ -185,8 +185,20 @@ def is_signal_active(symbol):
             SELECT id
             FROM active_signals
             WHERE symbol = %s
-            AND status IN ('NEW', 'ACTIVE', 'BOUGHT')
-            AND DATE(signal_time) = CURRENT_DATE
+
+            AND (
+                status IN (
+                    'NEW',
+                    'ACTIVE',
+                    'BOUGHT'
+                )
+
+                OR (
+                    cooldown_until IS NOT NULL
+                    AND cooldown_until > NOW()
+                )
+            )
+
             LIMIT 1
         """, (symbol,))
 
@@ -199,11 +211,11 @@ def is_signal_active(symbol):
 
     except Exception as e:
 
-        logger.error(f"Error checking active signal: {e}")
+        logger.error(
+            f"Error checking active signal: {e}"
+        )
 
         return False
-
-
 def expire_old_signals():
 
     try:
