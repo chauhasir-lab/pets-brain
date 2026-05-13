@@ -11,6 +11,26 @@ DAILY_TRADES = {"count": 0, "date": None}
 
 RISK_PER_TRADE = 0.02
 
+SECTOR_MAP = {
+    "TCS": "IT",
+    "INFY": "IT",
+    "WIPRO": "IT",
+
+    "HDFCBANK": "BANK",
+    "ICICIBANK": "BANK",
+    "SBIN": "BANK",
+
+    "SUNPHARMA": "PHARMA",
+    "CIPLA": "PHARMA",
+    "BIOCON": "PHARMA",
+
+    "TATASTEEL": "METAL",
+    "JSWSTEEL": "METAL",
+
+    "RELIANCE": "ENERGY",
+    "ONGC": "ENERGY"
+}
+
 
 def is_market_hours():
 
