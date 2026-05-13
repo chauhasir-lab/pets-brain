@@ -655,7 +655,7 @@ def analyze_setup(df, symbol):
             return None
 
         # Institutional quality threshold
-        if score < 70:
+        if score < 60:
             return None
 
         logger.info(
