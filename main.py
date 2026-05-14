@@ -1,108 +1,144 @@
+import schedule
+import time
 import logging
-import pandas as pd
-# Yahan apne zaroori imports check kar lein (dhan_data, database etc.)
-from dhan_data import get_dhan_data
-from database import get_active_bought_trades, close_trade, update_trade_note, update_stop_loss
-# Agar calculate_rsi alag file mein hai to wahan se import karein
-# from technical_indicators import calculate_rsi 
+import threading
 
+from database import (
+    create_tables,
+    get_connection
+)
+
+# Scanner file se run_scanner function import ho raha hai
+from scanner import run_scanner
+
+# Bot listener jo Telegram commands handle karega
+from bot_handler import start_bot_listener
+
+# Token refresh logic
+from token_manager import refresh_fyers_token
+
+# Alerts logic
+from telegram_alert import (
+    send_daily_summary,
+    send_trade_update
+)
+
+# Logging setup
+logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# --- GLOBAL STATES (Spam Control ke liye) ---
-SCAN_LOCK = {"running": False}
-LAST_ALERT_STATE = {} 
-
-def evaluate_open_positions():
-    trades = get_active_bought_trades()
-    if not trades:
+def daily_summary():
+    """Din bhar ke top 5 signals ki summary bhejta hai"""
+    conn = get_connection()
+    if not conn:
         return
 
-    logger.info(f"Monitoring {len(trades)} active trades")
-
-    for trade in trades:
-        try:
-            (symbol, entry_price, stop_loss, target1, target2,
-             quantity, rr, score, signal_time, setup_type) = trade
-
-            df = get_dhan_data(symbol)
-            if df is None:
-                continue
-
-            current_price = float(df['close'].iloc[-1])
-            # RSI aur EMA calculation
-            ema20 = df['close'].ewm(span=20, adjust=False).mean().iloc[-1]
-            
-            # Simple RSI logic (agar aapka function alag hai to use use karein)
-            delta = df['close'].diff()
-            gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
-            loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
-            rs = gain / loss
-            rsi = 100 - (100 / (1 + rs)).iloc[-1]
-
-            volume_avg = df['volume'].rolling(window=10).mean().iloc[-1]
-            latest_volume = df['volume'].iloc[-1]
-
-            # 1. TARGET 2 HIT
-            if current_price >= float(target2):
-                from telegram_alert import send_trade_update
-                send_trade_update(symbol, f"🚀 TARGET 2 HIT\nStock: {symbol}\nCMP: ₹{round(current_price, 2)}\nFull target achieved.")
-                close_trade(symbol, "TARGET2_HIT", current_price)
-                LAST_ALERT_STATE.pop(symbol, None)
-                continue
-
-            # 2. TARGET 1 HIT
-            if current_price >= float(target1):
-                from telegram_alert import send_trade_update
-                send_trade_update(symbol, f"🎯 TARGET 1 HIT\nStock: {symbol}\nCMP: ₹{round(current_price, 2)}\nBook 50% & Trail.")
-                update_trade_note(symbol, "Target 1 achieved")
-
-            # 3. STOP LOSS HIT
-            if current_price <= float(stop_loss):
-                from telegram_alert import send_trade_update
-                send_trade_update(symbol, f"❌ STOP LOSS HIT\nStock: {symbol}\nCMP: ₹{round(current_price, 2)}\nExit position.")
-                close_trade(symbol, "SL_HIT", current_price)
-                LAST_ALERT_STATE.pop(symbol, None)
-                continue
-
-            # 4. SMART NOTIFICATION LOGIC (State Change Only)
-            current_state = "NEUTRAL"
-            price_strength = current_price > ema20
-            volume_strength = latest_volume > volume_avg
-            momentum_strength = rsi > 55
-
-            if price_strength and volume_strength and momentum_strength:
-                current_state = "HEALTHY"
-            elif current_price < ema20 or rsi < 48:
-                current_state = "WEAKENING"
-
-            # Sirf tab alert bhejega jab state badlegi
-            if LAST_ALERT_STATE.get(symbol) != current_state:
-                from telegram_alert import send_trade_update
-                
-                if current_state == "HEALTHY":
-                    msg = f"📈 TRADE HEALTHY\nStock: {symbol}\nCMP: ₹{round(current_price, 2)}\nTrend strong, holding valid."
-                elif current_state == "WEAKENING":
-                    msg = f"⚠️ MOMENTUM WEAKENING\nStock: {symbol}\nCMP: ₹{round(current_price, 2)}\nPrice below EMA20. Caution!"
-                else:
-                    msg = f"⏳ TRADE NEUTRAL\nStock: {symbol}\nCMP: ₹{round(current_price, 2)}\nMomentum mixed."
-                
-                send_trade_update(symbol, msg)
-                LAST_ALERT_STATE[symbol] = current_state
-
-        except Exception as e:
-            logger.error(f"Error evaluating {symbol}: {e}")
-
-def run_scanner():
-    """Ye function main.py call karta hai, iska hona zaroori hai"""
-    if SCAN_LOCK["running"]:
-        return
-
-    SCAN_LOCK["running"] = True
     try:
-        logger.info("PETS Scanner cycle started...")
-        evaluate_open_positions()
-        # Yahan aap apna naya stock scanning logic (watchlist) bhi dal sakte hain
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT 
+                symbol, 
+                confidence, 
+                entry_price, 
+                target 
+            FROM signals 
+            WHERE created_at::date = CURRENT_DATE
+            ORDER BY confidence DESC 
+            LIMIT 5
+        """)
+        rows = cursor.fetchall()
+        count = len(rows)
+
+        top = ""
+        for r in rows:
+            top += (
+                f"• {r[0]} | "
+                f"Confidence: {r[1]}% | "
+                f"Entry: ₹{r[2]} | "
+                f"Target: ₹{r[3]}\n"
+            )
+
+        if not top:
+            top = "No signals today."
+
+        send_daily_summary(count, top)
+        cursor.close()
+        conn.close()
     except Exception as e:
-        logger.error(f"Scanner Run Error: {e}")
-    finally:
-        SCAN_LOCK["running"] = False
+        logger.error(f"Daily summary error: {e}")
+
+def analyze_daily_performance():
+    """Din khatam hone par PnL aur performance review bhejta hai"""
+    conn = get_connection()
+    if not conn:
+        return
+
+    try:
+        cursor = conn.cursor()
+        
+        # Wins calculation
+        cursor.execute("""
+            SELECT COUNT(*) FROM trade_analytics 
+            WHERE result IN ('TARGET1_HIT', 'TARGET2_HIT') 
+            AND created_at::date = CURRENT_DATE
+        """)
+        wins = cursor.fetchone()[0]
+
+        # Losses calculation
+        cursor.execute("""
+            SELECT COUNT(*) FROM trade_analytics 
+            WHERE result = 'SL_HIT' 
+            AND created_at::date = CURRENT_DATE
+        """)
+        losses = cursor.fetchone()[0]
+
+        # Performance Report Template
+        report = f'''
+📊 *PETS DAILY PERFORMANCE REVIEW*
+
+✅ Wins: {wins}
+❌ Losses: {losses}
+
+🚀 PETS memory updated successfully.
+'''
+        send_trade_update("DAILY REVIEW", report)
+        cursor.close()
+        conn.close()
+        logger.info("Daily review generated.")
+    except Exception as e:
+        logger.error(f"Performance analysis error: {e}")
+
+def main():
+    logger.info("PETS Engine starting...")
+
+    # 1. Database tables check/create karein
+    create_tables()
+
+    # 2. Telegram Bot ko alag thread mein start karein
+    bot_thread = threading.Thread(
+        target=start_bot_listener,
+        daemon=True
+    )
+    bot_thread.start()
+
+    # --- SCHEDULING LOGIC ---
+
+    # Har 30 seconds mein scanner run hoga
+    schedule.every(30).seconds.do(run_scanner)
+
+    # Roz subah 8 baje token refresh
+    schedule.every().day.at("08:00").do(refresh_fyers_token)
+
+    # Market close hone ke baad summaries (Timing badal sakte hain)
+    schedule.every().day.at("15:35").do(daily_summary)
+    schedule.every().day.at("15:40").do(analyze_daily_performance)
+
+    logger.info("Schedules active. PETS is now running.")
+
+    # Loop jo schedules ko check karta rahega
+    while True:
+        schedule.run_pending()
+        time.sleep(1)
+
+if __name__ == "__main__":
+    main()
