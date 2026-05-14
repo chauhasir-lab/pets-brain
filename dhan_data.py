@@ -51,7 +51,7 @@ def get_dhan_data(symbol):
         data = dhan.intraday_minute_data(
             security_id=security_id,
             exchange_segment="NSE_EQ",
-            instrument_type="EQUITY",
+            instrument_type="EQ",
             interval=15
         )
 
