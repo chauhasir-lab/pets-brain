@@ -15,21 +15,16 @@ SECTOR_MAP = {
     "TCS": "IT",
     "INFY": "IT",
     "WIPRO": "IT",
-
     "HDFCBANK": "BANK",
     "ICICIBANK": "BANK",
     "SBIN": "BANK",
-
     "SUNPHARMA": "PHARMA",
     "CIPLA": "PHARMA",
     "BIOCON": "PHARMA",
-
     "TATASTEEL": "METAL",
     "JSWSTEEL": "METAL",
-
     "RELIANCE": "ENERGY",
     "ONGC": "ENERGY",
-    
     "LT": "INFRA"
 }
 
@@ -141,52 +136,24 @@ def check_volume_spike(df):
     return latest_volume > (avg_volume.iloc[-1] * 1.5)
 
 
-def calculate_position_size(
-    entry,
-    sl,
-    capital=10000
-):
+def calculate_position_size(entry, sl, capital=10000):
     try:
-        # Max 25% of capital per trade
         max_capital_allocation = capital * 0.25
-
-        # Amount to risk (2% of total capital)
         risk_amount = capital * RISK_PER_TRADE
-
-        # Absolute difference between entry and sl
         risk_per_share = abs(entry - sl)
-
-        # Institutional safeguard: Minimum 0.5% risk distance
         min_risk_distance = entry * 0.005
 
         if risk_per_share < min_risk_distance:
             risk_per_share = min_risk_distance
 
-        # Quantity based on risk
-        risk_qty = int(
-            risk_amount / risk_per_share
-        )
-
-        # Quantity based on capital allocation limit
-        capital_qty = int(
-            max_capital_allocation / entry
-        )
-
-        # Final qty is the lower of the two
-        qty = min(
-            risk_qty,
-            capital_qty
-        )
-
-        # Ensure at least 1 share
+        risk_qty = int(risk_amount / risk_per_share)
+        capital_qty = int(max_capital_allocation / entry)
+        qty = min(risk_qty, capital_qty)
         qty = max(qty, 1)
 
         return qty
-
     except Exception as e:
-        logger.error(
-            f"Position sizing error: {e}"
-        )
+        logger.error(f"Position sizing error: {e}")
         return 1
 
 
@@ -297,7 +264,12 @@ def analyze_setup(df, symbol):
         latest = df.iloc[-2]
         prev = df.iloc[-3]
         recent_high = df['high'].rolling(window=10).max().iloc[-3]
-        structure_breakout = (latest['close'] > recent_high)
+
+        # 1. UPDATED: Structure Breakout with ATR filter
+        structure_breakout = (
+            latest['close'] 
+            > (recent_high + (0.15 * latest['atr']))
+        )
 
         candle_body = abs(latest['close'] - latest['open'])
         candle_range = (latest['high'] - latest['low'])
@@ -321,15 +293,39 @@ def analyze_setup(df, symbol):
             score += 20
             reasons.append("Strong VWAP Structure Breakout")
 
-        if latest['close'] > latest['ema_20'] > latest['ema_50']:
+        # 2. UPDATED: EMA Distance Logic
+        ema_distance = (
+            abs(
+                latest['ema_20']
+                - latest['ema_50']
+            ) / latest['close']
+        )
+
+        if (
+            latest['close']
+            > latest['ema_20']
+            > latest['ema_50']
+        ):
+            if ema_distance < 0.003:
+                return None
+
             score += 15
-            reasons.append("EMA Bullish")
+            reasons.append("Strong EMA Trend Alignment")
 
         if check_volume_spike(df):
             score += 20
             reasons.append("Volume Spike")
 
-        if 55 < latest['rsi'] < 78:
+        # 3. UPDATED: RSI Momentum with Slope
+        rsi_slope = (
+            latest['rsi']
+            - prev['rsi']
+        )
+
+        if (
+            58 < latest['rsi'] < 70
+            and rsi_slope > 2
+        ):
             score += 15
             reasons.append("RSI Momentum")
 
