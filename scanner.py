@@ -33,6 +33,7 @@ WATCHLIST = [
 KILL_SWITCH = {"losses": 0, "active": True}
 BATCH_INDEX = [0]
 SCAN_LOCK = {"running": False}
+LAST_ALERT_STATE = {}
 MAX_ACTIVE_TRADES = 3
 
 
