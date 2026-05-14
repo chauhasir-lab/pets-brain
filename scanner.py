@@ -1,3 +1,17 @@
+import logging
+import pandas as pd
+# Yahan apne zaroori imports check kar lein (dhan_data, database etc.)
+from dhan_data import get_dhan_data
+from database import get_active_bought_trades, close_trade, update_trade_note, update_stop_loss
+# Agar calculate_rsi alag file mein hai to wahan se import karein
+# from technical_indicators import calculate_rsi 
+
+logger = logging.getLogger(__name__)
+
+# --- GLOBAL STATES (Spam Control ke liye) ---
+SCAN_LOCK = {"running": False}
+LAST_ALERT_STATE = {} 
+
 def evaluate_open_positions():
     trades = get_active_bought_trades()
     if not trades:
@@ -15,115 +29,80 @@ def evaluate_open_positions():
                 continue
 
             current_price = float(df['close'].iloc[-1])
+            # RSI aur EMA calculation
             ema20 = df['close'].ewm(span=20, adjust=False).mean().iloc[-1]
-            rsi = calculate_rsi(df)['rsi'].iloc[-1]
+            
+            # Simple RSI logic (agar aapka function alag hai to use use karein)
+            delta = df['close'].diff()
+            gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
+            loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
+            rs = gain / loss
+            rsi = 100 - (100 / (1 + rs)).iloc[-1]
+
             volume_avg = df['volume'].rolling(window=10).mean().iloc[-1]
             latest_volume = df['volume'].iloc[-1]
 
-            # TARGET 2 HIT
+            # 1. TARGET 2 HIT
             if current_price >= float(target2):
-                send_trade_update(symbol,
-                    f"🚀 TARGET 2 HIT\n"
-                    f"Stock: {symbol}\n"
-                    f"CMP: ₹{round(current_price, 2)}\n"
-                    f"Full target achieved. Exit position."
-                )
+                from telegram_alert import send_trade_update
+                send_trade_update(symbol, f"🚀 TARGET 2 HIT\nStock: {symbol}\nCMP: ₹{round(current_price, 2)}\nFull target achieved.")
                 close_trade(symbol, "TARGET2_HIT", current_price)
-                # Position closed, clean state
                 LAST_ALERT_STATE.pop(symbol, None)
                 continue
 
-            # TARGET 1 HIT
+            # 2. TARGET 1 HIT
             if current_price >= float(target1):
-                send_trade_update(symbol,
-                    f"🎯 TARGET 1 HIT\n"
-                    f"Stock: {symbol}\n"
-                    f"CMP: ₹{round(current_price, 2)}\n"
-                    f"Book 50% position here. Trail rest."
-                )
+                from telegram_alert import send_trade_update
+                send_trade_update(symbol, f"🎯 TARGET 1 HIT\nStock: {symbol}\nCMP: ₹{round(current_price, 2)}\nBook 50% & Trail.")
                 update_trade_note(symbol, "Target 1 achieved")
 
-            # STOP LOSS HIT
+            # 3. STOP LOSS HIT
             if current_price <= float(stop_loss):
-                send_trade_update(symbol,
-                    f"❌ STOP LOSS HIT\n"
-                    f"Stock: {symbol}\n"
-                    f"CMP: ₹{round(current_price, 2)}\n"
-                    f"Trade closed. Accept loss and move on."
-                )
+                from telegram_alert import send_trade_update
+                send_trade_update(symbol, f"❌ STOP LOSS HIT\nStock: {symbol}\nCMP: ₹{round(current_price, 2)}\nExit position.")
                 close_trade(symbol, "SL_HIT", current_price)
                 LAST_ALERT_STATE.pop(symbol, None)
                 continue
 
-            # TRAILING SL (Alerts only on SL Change)
-            profit_move = current_price - float(entry_price)
-            initial_risk = float(entry_price) - float(stop_loss)
-
-            if profit_move >= (2 * initial_risk):
-                new_sl = float(entry_price) + initial_risk
-                update_stop_loss(symbol, new_sl)
-                send_trade_update(symbol,
-                    f"🚀 PROFIT LOCKED\n"
-                    f"Stock: {symbol}\n"
-                    f"Trailing SL moved to: ₹{round(new_sl, 2)}\n"
-                    f"Risk free trade now."
-                )
-            elif profit_move >= initial_risk:
-                update_stop_loss(symbol, float(entry_price))
-                send_trade_update(symbol,
-                    f"🔒 BREAKEVEN ACTIVATED\n"
-                    f"Stock: {symbol}\n"
-                    f"SL moved to entry: ₹{round(float(entry_price), 2)}\n"
-                    f"No loss possible now."
-                )
-
-            # --- SMART NOTIFICATION CONTROL STEP 3 (FINAL) ---
+            # 4. SMART NOTIFICATION LOGIC (State Change Only)
             current_state = "NEUTRAL"
-
-            # INTELLIGENT TRADE ANALYSIS
             price_strength = current_price > ema20
             volume_strength = latest_volume > volume_avg
             momentum_strength = rsi > 55
 
             if price_strength and volume_strength and momentum_strength:
                 current_state = "HEALTHY"
-                if LAST_ALERT_STATE.get(symbol) != current_state:
-                    send_trade_update(symbol,
-                        f"📈 TRADE HEALTHY\n"
-                        f"Stock: {symbol}\n"
-                        f"CMP: ₹{round(current_price, 2)}\n"
-                        f"Trend strong above EMA20.\n"
-                        f"Volume participation healthy.\n"
-                        f"Momentum intact.\n"
-                        f"Holding remains valid."
-                    )
-                    LAST_ALERT_STATE[symbol] = current_state
-
             elif current_price < ema20 or rsi < 48:
                 current_state = "WEAKENING"
-                if LAST_ALERT_STATE.get(symbol) != current_state:
-                    send_trade_update(symbol,
-                        f"⚠️ MOMENTUM WEAKENING\n"
-                        f"Stock: {symbol}\n"
-                        f"CMP: ₹{round(current_price, 2)}\n"
-                        f"Price losing EMA support.\n"
-                        f"Momentum deteriorating.\n"
-                        f"Probability of pullback increasing.\n"
-                        f"Consider reducing exposure."
-                    )
-                    LAST_ALERT_STATE[symbol] = current_state
-            else:
-                current_state = "NEUTRAL"
-                if LAST_ALERT_STATE.get(symbol) != current_state:
-                    send_trade_update(symbol,
-                        f"⏳ TRADE NEUTRAL\n"
-                        f"Stock: {symbol}\n"
-                        f"CMP: ₹{round(current_price, 2)}\n"
-                        f"Trade active but momentum mixed.\n"
-                        f"No strong exit signal yet.\n"
-                        f"Wait for confirmation."
-                    )
-                    LAST_ALERT_STATE[symbol] = current_state
+
+            # Sirf tab alert bhejega jab state badlegi
+            if LAST_ALERT_STATE.get(symbol) != current_state:
+                from telegram_alert import send_trade_update
+                
+                if current_state == "HEALTHY":
+                    msg = f"📈 TRADE HEALTHY\nStock: {symbol}\nCMP: ₹{round(current_price, 2)}\nTrend strong, holding valid."
+                elif current_state == "WEAKENING":
+                    msg = f"⚠️ MOMENTUM WEAKENING\nStock: {symbol}\nCMP: ₹{round(current_price, 2)}\nPrice below EMA20. Caution!"
+                else:
+                    msg = f"⏳ TRADE NEUTRAL\nStock: {symbol}\nCMP: ₹{round(current_price, 2)}\nMomentum mixed."
+                
+                send_trade_update(symbol, msg)
+                LAST_ALERT_STATE[symbol] = current_state
 
         except Exception as e:
-            logger.error(f"Trade monitor error for {symbol}: {e}")
+            logger.error(f"Error evaluating {symbol}: {e}")
+
+def run_scanner():
+    """Ye function main.py call karta hai, iska hona zaroori hai"""
+    if SCAN_LOCK["running"]:
+        return
+
+    SCAN_LOCK["running"] = True
+    try:
+        logger.info("PETS Scanner cycle started...")
+        evaluate_open_positions()
+        # Yahan aap apna naya stock scanning logic (watchlist) bhi dal sakte hain
+    except Exception as e:
+        logger.error(f"Scanner Run Error: {e}")
+    finally:
+        SCAN_LOCK["running"] = False
