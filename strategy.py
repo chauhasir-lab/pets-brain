@@ -28,7 +28,6 @@ SECTOR_MAP = {
     "LT": "INFRA"
 }
 
-
 def is_market_hours():
     try:
         import pytz
@@ -46,7 +45,6 @@ def is_market_hours():
         ist_time = ist.hour * 100 + ist.minute
         return 915 <= ist_time <= 1530
 
-
 def check_daily_limit():
     today = datetime.utcnow().date()
     if DAILY_TRADES["date"] != today:
@@ -54,10 +52,8 @@ def check_daily_limit():
         DAILY_TRADES["date"] = today
     return DAILY_TRADES["count"] < 3
 
-
 def increment_trade_count():
     DAILY_TRADES["count"] += 1
-
 
 def get_nifty_trend():
     try:
@@ -96,6 +92,21 @@ def get_nifty_trend():
         logger.error(f"Nifty trend error: {e}")
     return "BULLISH"
 
+# --- NEW UTILITY FUNCTION: RELATIVE STRENGTH ---
+def check_relative_strength(df):
+    try:
+        stock_return = (
+            (
+                df['close'].iloc[-1]
+                - df['close'].iloc[-6]
+            )
+            / df['close'].iloc[-6]
+        ) * 100
+
+        nifty_strength = 0.4
+        return stock_return > nifty_strength
+    except Exception:
+        return False
 
 def calculate_vwap(df):
     df['tp'] = (df['high'] + df['low'] + df['close']) / 3
@@ -103,11 +114,9 @@ def calculate_vwap(df):
     df['vwap'] = (df['tpv'].cumsum() / df['volume'].cumsum())
     return df
 
-
 def calculate_ema(df, period):
     df[f'ema_{period}'] = (df['close'].ewm(span=period, adjust=False).mean())
     return df
-
 
 def calculate_atr(df, period=20):
     df['tr'] = np.maximum(
@@ -120,7 +129,6 @@ def calculate_atr(df, period=20):
     df['atr'] = (df['tr'].rolling(window=period).mean())
     return df
 
-
 def calculate_rsi(df, period=14):
     delta = df['close'].diff()
     gain = (delta.where(delta > 0, 0).rolling(window=period).mean())
@@ -129,12 +137,10 @@ def calculate_rsi(df, period=14):
     df['rsi'] = 100 - (100 / (1 + rs))
     return df
 
-
 def check_volume_spike(df):
     avg_volume = (df['volume'].rolling(window=10).mean())
     latest_volume = df['volume'].iloc[-1]
     return latest_volume > (avg_volume.iloc[-1] * 1.5)
-
 
 def calculate_position_size(entry, sl, capital=10000):
     try:
@@ -156,7 +162,6 @@ def calculate_position_size(entry, sl, capital=10000):
         logger.error(f"Position sizing error: {e}")
         return 1
 
-
 def detect_market_regime(df):
     atr = df['atr'].iloc[-1]
     avg_atr = (df['atr'].rolling(window=20).mean().iloc[-1])
@@ -171,12 +176,10 @@ def detect_market_regime(df):
         return "SIDEWAYS", 1.2
     return "NORMAL", 1.3
 
-
 def get_stock_personality(symbol, regime):
     try:
         conn = get_connection()
-        if not conn:
-            return 0
+        if not conn: return 0
         cursor = conn.cursor()
         cursor.execute("""
             SELECT
@@ -188,12 +191,10 @@ def get_stock_personality(symbol, regime):
         row = cursor.fetchone()
         cursor.close()
         conn.close()
-
         if not row: return 0
         wins, losses = row[0] or 0, row[1] or 0
         total = wins + losses
         if total < 3: return 0
-        
         win_rate = wins / total
         if win_rate >= 0.75: return 20
         elif win_rate >= 0.65: return 12
@@ -203,7 +204,6 @@ def get_stock_personality(symbol, regime):
     except Exception as e:
         logger.error(f"Stock personality error: {e}")
         return 0
-
 
 def get_sector_strength(symbol):
     try:
@@ -222,12 +222,10 @@ def get_sector_strength(symbol):
         row = cursor.fetchone()
         cursor.close()
         conn.close()
-
         if not row: return 0
         wins, losses = row[0] or 0, row[1] or 0
         total = wins + losses
         if total < 5: return 0
-        
         win_rate = wins / total
         if win_rate >= 0.7: return 15
         elif win_rate >= 0.6: return 8
@@ -236,7 +234,6 @@ def get_sector_strength(symbol):
     except Exception as e:
         logger.error(f"Sector strength error: {e}")
         return 0
-
 
 def analyze_setup(df, symbol):
     try:
@@ -265,7 +262,7 @@ def analyze_setup(df, symbol):
         prev = df.iloc[-3]
         recent_high = df['high'].rolling(window=10).max().iloc[-3]
 
-        # 1. UPDATED: Structure Breakout with ATR filter
+        # 1. Structure Breakout with ATR filter
         structure_breakout = (
             latest['close'] 
             > (recent_high + (0.15 * latest['atr']))
@@ -293,22 +290,12 @@ def analyze_setup(df, symbol):
             score += 20
             reasons.append("Strong VWAP Structure Breakout")
 
-        # 2. UPDATED: EMA Distance Logic
-        ema_distance = (
-            abs(
-                latest['ema_20']
-                - latest['ema_50']
-            ) / latest['close']
-        )
+        # 2. EMA Distance Logic
+        ema_distance = (abs(latest['ema_20'] - latest['ema_50']) / latest['close'])
 
-        if (
-            latest['close']
-            > latest['ema_20']
-            > latest['ema_50']
-        ):
+        if (latest['close'] > latest['ema_20'] > latest['ema_50']):
             if ema_distance < 0.003:
                 return None
-
             score += 15
             reasons.append("Strong EMA Trend Alignment")
 
@@ -316,18 +303,16 @@ def analyze_setup(df, symbol):
             score += 20
             reasons.append("Volume Spike")
 
-        # 3. UPDATED: RSI Momentum with Slope
-        rsi_slope = (
-            latest['rsi']
-            - prev['rsi']
-        )
-
-        if (
-            58 < latest['rsi'] < 70
-            and rsi_slope > 2
-        ):
+        # 3. RSI Momentum with Slope
+        rsi_slope = (latest['rsi'] - prev['rsi'])
+        if (58 < latest['rsi'] < 75 and rsi_slope > 2):
             score += 15
             reasons.append("RSI Momentum")
+
+        # --- RELATIVE STRENGTH CHECK ---
+        if check_relative_strength(df):
+            score += 10
+            reasons.append("Relative Strength Leader")
 
         personality_score = get_stock_personality(symbol, regime)
         score += personality_score
@@ -358,9 +343,14 @@ def analyze_setup(df, symbol):
         else:
             score -= 10
 
-        # HARD FILTERS
-        if latest['volume'] < avg_volume or latest['close'] < latest['vwap'] or \
-           latest['ema_20'] < latest['ema_50'] or rr < 1.8 or latest['rsi'] > 78 or score < 65:
+        # HARD FILTERS (Integrated Relative Strength)
+        if (latest['volume'] < avg_volume or 
+            latest['close'] < latest['vwap'] or 
+            latest['ema_20'] < latest['ema_50'] or 
+            rr < 1.8 or 
+            latest['rsi'] > 78 or 
+            score < 65 or
+            not check_relative_strength(df)): # Must outperform market
             return None
 
         logger.info(f"{symbol} | Score={score} | Regime={regime} | RR={rr}")
