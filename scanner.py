@@ -29,6 +29,8 @@ def evaluate_open_positions():
                     f"Full target achieved. Exit position."
                 )
                 close_trade(symbol, "TARGET2_HIT", current_price)
+                # Position closed, clean state
+                LAST_ALERT_STATE.pop(symbol, None)
                 continue
 
             # TARGET 1 HIT
@@ -50,9 +52,10 @@ def evaluate_open_positions():
                     f"Trade closed. Accept loss and move on."
                 )
                 close_trade(symbol, "SL_HIT", current_price)
+                LAST_ALERT_STATE.pop(symbol, None)
                 continue
 
-            # TRAILING SL
+            # TRAILING SL (Alerts only on SL Change)
             profit_move = current_price - float(entry_price)
             initial_risk = float(entry_price) - float(stop_loss)
 
@@ -74,7 +77,7 @@ def evaluate_open_positions():
                     f"No loss possible now."
                 )
 
-            # --- SMART NOTIFICATION CONTROL STEP 2 ---
+            # --- SMART NOTIFICATION CONTROL STEP 3 (FINAL) ---
             current_state = "NEUTRAL"
 
             # INTELLIGENT TRADE ANALYSIS
@@ -83,36 +86,44 @@ def evaluate_open_positions():
             momentum_strength = rsi > 55
 
             if price_strength and volume_strength and momentum_strength:
-                current_state = "HEALTHY" # State marked as Healthy
-                send_trade_update(symbol,
-                    f"📈 TRADE HEALTHY\n"
-                    f"Stock: {symbol}\n"
-                    f"CMP: ₹{round(current_price, 2)}\n"
-                    f"Trend strong above EMA20.\n"
-                    f"Volume participation healthy.\n"
-                    f"Momentum intact.\n"
-                    f"Holding remains valid."
-                )
+                current_state = "HEALTHY"
+                if LAST_ALERT_STATE.get(symbol) != current_state:
+                    send_trade_update(symbol,
+                        f"📈 TRADE HEALTHY\n"
+                        f"Stock: {symbol}\n"
+                        f"CMP: ₹{round(current_price, 2)}\n"
+                        f"Trend strong above EMA20.\n"
+                        f"Volume participation healthy.\n"
+                        f"Momentum intact.\n"
+                        f"Holding remains valid."
+                    )
+                    LAST_ALERT_STATE[symbol] = current_state
+
             elif current_price < ema20 or rsi < 48:
-                current_state = "WEAKENING" # State marked as Weakening
-                send_trade_update(symbol,
-                    f"⚠️ MOMENTUM WEAKENING\n"
-                    f"Stock: {symbol}\n"
-                    f"CMP: ₹{round(current_price, 2)}\n"
-                    f"Price losing EMA support.\n"
-                    f"Momentum deteriorating.\n"
-                    f"Probability of pullback increasing.\n"
-                    f"Consider reducing exposure."
-                )
+                current_state = "WEAKENING"
+                if LAST_ALERT_STATE.get(symbol) != current_state:
+                    send_trade_update(symbol,
+                        f"⚠️ MOMENTUM WEAKENING\n"
+                        f"Stock: {symbol}\n"
+                        f"CMP: ₹{round(current_price, 2)}\n"
+                        f"Price losing EMA support.\n"
+                        f"Momentum deteriorating.\n"
+                        f"Probability of pullback increasing.\n"
+                        f"Consider reducing exposure."
+                    )
+                    LAST_ALERT_STATE[symbol] = current_state
             else:
-                send_trade_update(symbol,
-                    f"⏳ TRADE NEUTRAL\n"
-                    f"Stock: {symbol}\n"
-                    f"CMP: ₹{round(current_price, 2)}\n"
-                    f"Trade active but momentum mixed.\n"
-                    f"No strong exit signal yet.\n"
-                    f"Wait for confirmation."
-                )
+                current_state = "NEUTRAL"
+                if LAST_ALERT_STATE.get(symbol) != current_state:
+                    send_trade_update(symbol,
+                        f"⏳ TRADE NEUTRAL\n"
+                        f"Stock: {symbol}\n"
+                        f"CMP: ₹{round(current_price, 2)}\n"
+                        f"Trade active but momentum mixed.\n"
+                        f"No strong exit signal yet.\n"
+                        f"Wait for confirmation."
+                    )
+                    LAST_ALERT_STATE[symbol] = current_state
 
         except Exception as e:
             logger.error(f"Trade monitor error for {symbol}: {e}")
