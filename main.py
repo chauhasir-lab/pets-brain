@@ -1,217 +1,108 @@
-import schedule
-import time
 import logging
-import threading
-
-from database import (
-    create_tables,
-    get_connection
-)
-
-from scanner import run_scanner
-
-from bot_handler import start_bot_listener
-
-from token_manager import refresh_fyers_token
-
-from telegram_alert import (
-    send_daily_summary,
-    send_trade_update
-)
-
-logging.basicConfig(level=logging.INFO)
+import pandas as pd
+# Yahan apne zaroori imports check kar lein (dhan_data, database etc.)
+from dhan_data import get_dhan_data
+from database import get_active_bought_trades, close_trade, update_trade_note, update_stop_loss
+# Agar calculate_rsi alag file mein hai to wahan se import karein
+# from technical_indicators import calculate_rsi 
 
 logger = logging.getLogger(__name__)
 
+# --- GLOBAL STATES (Spam Control ke liye) ---
+SCAN_LOCK = {"running": False}
+LAST_ALERT_STATE = {} 
 
-def daily_summary():
-
-    conn = get_connection()
-
-    if not conn:
+def evaluate_open_positions():
+    trades = get_active_bought_trades()
+    if not trades:
         return
 
-    try:
+    logger.info(f"Monitoring {len(trades)} active trades")
 
-        cursor = conn.cursor()
+    for trade in trades:
+        try:
+            (symbol, entry_price, stop_loss, target1, target2,
+             quantity, rr, score, signal_time, setup_type) = trade
 
-        cursor.execute("""
-            SELECT
-                symbol,
-                confidence,
-                entry_price,
-                target
-            FROM signals
-            WHERE created_at::date = CURRENT_DATE
-            ORDER BY confidence DESC
-            LIMIT 5
-        """)
+            df = get_dhan_data(symbol)
+            if df is None:
+                continue
 
-        rows = cursor.fetchall()
+            current_price = float(df['close'].iloc[-1])
+            # RSI aur EMA calculation
+            ema20 = df['close'].ewm(span=20, adjust=False).mean().iloc[-1]
+            
+            # Simple RSI logic (agar aapka function alag hai to use use karein)
+            delta = df['close'].diff()
+            gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
+            loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
+            rs = gain / loss
+            rsi = 100 - (100 / (1 + rs)).iloc[-1]
 
-        count = len(rows)
+            volume_avg = df['volume'].rolling(window=10).mean().iloc[-1]
+            latest_volume = df['volume'].iloc[-1]
 
-        top = ""
+            # 1. TARGET 2 HIT
+            if current_price >= float(target2):
+                from telegram_alert import send_trade_update
+                send_trade_update(symbol, f"🚀 TARGET 2 HIT\nStock: {symbol}\nCMP: ₹{round(current_price, 2)}\nFull target achieved.")
+                close_trade(symbol, "TARGET2_HIT", current_price)
+                LAST_ALERT_STATE.pop(symbol, None)
+                continue
 
-        for r in rows:
+            # 2. TARGET 1 HIT
+            if current_price >= float(target1):
+                from telegram_alert import send_trade_update
+                send_trade_update(symbol, f"🎯 TARGET 1 HIT\nStock: {symbol}\nCMP: ₹{round(current_price, 2)}\nBook 50% & Trail.")
+                update_trade_note(symbol, "Target 1 achieved")
 
-            top += (
-                f"• {r[0]} | "
-                f"Confidence: {r[1]}% | "
-                f"Entry: ₹{r[2]} | "
-                f"Target: ₹{r[3]}\n"
-            )
+            # 3. STOP LOSS HIT
+            if current_price <= float(stop_loss):
+                from telegram_alert import send_trade_update
+                send_trade_update(symbol, f"❌ STOP LOSS HIT\nStock: {symbol}\nCMP: ₹{round(current_price, 2)}\nExit position.")
+                close_trade(symbol, "SL_HIT", current_price)
+                LAST_ALERT_STATE.pop(symbol, None)
+                continue
 
-        if not top:
-            top = "No signals today."
+            # 4. SMART NOTIFICATION LOGIC (State Change Only)
+            current_state = "NEUTRAL"
+            price_strength = current_price > ema20
+            volume_strength = latest_volume > volume_avg
+            momentum_strength = rsi > 55
 
-        send_daily_summary(count, top)
+            if price_strength and volume_strength and momentum_strength:
+                current_state = "HEALTHY"
+            elif current_price < ema20 or rsi < 48:
+                current_state = "WEAKENING"
 
-        cursor.close()
-        conn.close()
+            # Sirf tab alert bhejega jab state badlegi
+            if LAST_ALERT_STATE.get(symbol) != current_state:
+                from telegram_alert import send_trade_update
+                
+                if current_state == "HEALTHY":
+                    msg = f"📈 TRADE HEALTHY\nStock: {symbol}\nCMP: ₹{round(current_price, 2)}\nTrend strong, holding valid."
+                elif current_state == "WEAKENING":
+                    msg = f"⚠️ MOMENTUM WEAKENING\nStock: {symbol}\nCMP: ₹{round(current_price, 2)}\nPrice below EMA20. Caution!"
+                else:
+                    msg = f"⏳ TRADE NEUTRAL\nStock: {symbol}\nCMP: ₹{round(current_price, 2)}\nMomentum mixed."
+                
+                send_trade_update(symbol, msg)
+                LAST_ALERT_STATE[symbol] = current_state
 
-    except Exception as e:
+        except Exception as e:
+            logger.error(f"Error evaluating {symbol}: {e}")
 
-        logger.error(f"Daily summary error: {e}")
-
-
-def analyze_daily_performance():
-
-    conn = get_connection()
-
-    if not conn:
+def run_scanner():
+    """Ye function main.py call karta hai, iska hona zaroori hai"""
+    if SCAN_LOCK["running"]:
         return
 
+    SCAN_LOCK["running"] = True
     try:
-
-        cursor = conn.cursor()
-
-        # Wins
-        cursor.execute("""
-            SELECT COUNT(*)
-            FROM trade_analytics
-            WHERE result IN ('TARGET1_HIT', 'TARGET2_HIT')
-            AND created_at::date = CURRENT_DATE
-        """)
-
-        wins = cursor.fetchone()[0]
-
-        # Losses
-        cursor.execute("""
-            SELECT COUNT(*)
-            FROM trade_analytics
-            WHERE result = 'SL_HIT'
-            AND created_at::date = CURRENT_DATE
-        """)
-
-        losses = cursor.fetchone()[0]
-
-        # Best stock
-        cursor.execute("""
-            SELECT symbol, SUM(pnl) as total_pnl
-            FROM trade_analytics
-            WHERE created_at::date = CURRENT_DATE
-            GROUP BY symbol
-            ORDER BY total_pnl DESC
-            LIMIT 1
-        """)
-
-        best_stock = cursor.fetchone()
-
-        # Worst stock
-        cursor.execute("""
-            SELECT symbol, SUM(pnl) as total_pnl
-            FROM trade_analytics
-            WHERE created_at::date = CURRENT_DATE
-            GROUP BY symbol
-            ORDER BY total_pnl ASC
-            LIMIT 1
-        """)
-
-        worst_stock = cursor.fetchone()
-
-        # Best setup
-        cursor.execute("""
-            SELECT setup_type, COUNT(*)
-            FROM trade_analytics
-            WHERE result IN ('TARGET1_HIT', 'TARGET2_HIT')
-            AND created_at::date = CURRENT_DATE
-            GROUP BY setup_type
-            ORDER BY COUNT(*) DESC
-            LIMIT 1
-        """)
-
-        best_setup = cursor.fetchone()
-
-        report = f'''
-📊 PETS DAILY PERFORMANCE REVIEW
-
-✅ Wins: {wins}
-❌ Losses: {losses}
-
-🏆 Best Stock:
-{best_stock[0] if best_stock else "N/A"}
-
-📉 Worst Stock:
-{worst_stock[0] if worst_stock else "N/A"}
-
-🧠 Best Setup:
-{best_setup[0] if best_setup else "N/A"}
-
-🚀 PETS memory updated successfully.
-'''
-
-        send_trade_update("DAILY REVIEW", report)
-
-        cursor.close()
-        conn.close()
-
-        logger.info("Daily review generated.")
-
+        logger.info("PETS Scanner cycle started...")
+        evaluate_open_positions()
+        # Yahan aap apna naya stock scanning logic (watchlist) bhi dal sakte hain
     except Exception as e:
-
-        logger.error(f"Performance analysis error: {e}")
-
-
-def main():
-
-    logger.info("PETS Engine started.")
-
-    create_tables()
-
-    # Telegram bot listener
-    bot_thread = threading.Thread(
-        target=start_bot_listener,
-        daemon=True
-    )
-
-    bot_thread.start()
-
-    # Scanner
-    schedule.every(30).seconds.do(run_scanner)
-
-    # Token refresh
-    schedule.every().day.at("08:00").do(
-        refresh_fyers_token
-    )
-
-    # Daily signal summary
-    schedule.every().day.at("15:35").do(
-        daily_summary
-    )
-
-    # Daily self review
-    schedule.every().day.at("15:40").do(
-        analyze_daily_performance
-    )
-
-    while True:
-
-        schedule.run_pending()
-
-        time.sleep(1)
-
-
-if __name__ == "__main__":
-
-    main()
+        logger.error(f"Scanner Run Error: {e}")
+    finally:
+        SCAN_LOCK["running"] = False
