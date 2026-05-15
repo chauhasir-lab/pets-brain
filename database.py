@@ -251,6 +251,25 @@ def update_stop_loss(symbol, new_sl):
     except Exception as e:
         logger.error(f"SL update error: {e}")
 
+def update_trade_note(symbol, note):
+    """Saves a note/feedback for an active signal."""
+    conn = get_connection()
+    if not conn:
+        return
+    try:
+        cursor = conn.cursor()
+        cursor.execute("""
+            UPDATE active_signals
+            SET notes = %s
+            WHERE symbol = %s
+            AND status != 'CLOSED'
+        """, (note, symbol))
+        conn.commit()
+        cursor.close()
+        conn.close()
+    except Exception as e:
+        logger.error(f"Update trade note error: {e}")
+
 def save_trade_analytics(symbol, result, entry_price, exit_price, stop_loss, target1, target2, rr, score, regime, state):
     conn = get_connection()
     if not conn: return
