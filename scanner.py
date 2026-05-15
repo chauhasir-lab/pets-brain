@@ -23,31 +23,92 @@ SYSTEM_STATS = {
     "last_error": None
 }
 
+LAST_CLEANUP_TIME = {
+    "time": datetime.utcnow()
+}
+
 MARKET_BREADTH = {"bullish": 0, "bearish": 0}
 LAST_SCAN_TIME = {"time": None}
+
+# Placeholder state maps for cleanup engine logic
+LAST_ALERT_STATE = {}
+TRADE_STATE = {}
+BREAKEVEN_DONE = {}
+LAST_TRAILING_SL = {}
+STATE_WEAKNESS_COUNT = {}
+LIVE_CONFIDENCE = {}
+TRADE_PRIORITY = {}
 
 # Default Watchlist
 WATCHLIST = ["RELIANCE", "TCS", "HDFCBANK", "INFY", "ICICIBANK", "ITC", "SBIN", "BHARTIARTL"]
 
+def get_active_bought_trades():
+    """Placeholder to fetch active trades from DB/System"""
+    return []
+
+def cleanup_memory():
+    now = datetime.utcnow()
+
+    # Cleanup old watchlist scores (Decay mechanism)
+    for symbol in list(WATCHLIST_SCORES.keys()):
+        WATCHLIST_SCORES[symbol] *= 0.95
+        if abs(WATCHLIST_SCORES[symbol]) < 1:
+            WATCHLIST_SCORES.pop(symbol, None)
+
+    # Cleanup stale confidence and states for inactive symbols
+    active_symbols = set()
+    trades = get_active_bought_trades()
+    for trade in trades:
+        active_symbols.add(trade[0])
+
+    all_maps = [
+        LAST_ALERT_STATE,
+        TRADE_STATE,
+        BREAKEVEN_DONE,
+        LAST_TRAILING_SL,
+        STATE_WEAKNESS_COUNT,
+        LIVE_CONFIDENCE,
+        TRADE_PRIORITY
+    ]
+
+    for memory_map in all_maps:
+        for symbol in list(memory_map.keys()):
+            if symbol not in active_symbols:
+                memory_map.pop(symbol, None)
+
+    LAST_CLEANUP_TIME["time"] = now
+    logger.info("Memory cleanup completed")
+
 def run_scanner():
     global WATCHLIST
-    SYSTEM_STATS["total_scans"] += 1
-    LAST_SCAN_TIME["time"] = datetime.utcnow()
     
-    # Reset Breadth
-    MARKET_BREADTH["bullish"] = 0
-    MARKET_BREADTH["bearish"] = 0
+    try:
+        # =========================================
+        # PERIODIC MEMORY CLEANUP
+        # =========================================
+        minutes_since_cleanup = (
+            datetime.utcnow() - LAST_CLEANUP_TIME["time"]
+        ).total_seconds() / 60
 
-    # =========================================
-    # STEP 4: DYNAMIC WATCHLIST SORTING
-    # =========================================
-    WATCHLIST.sort(
-        key=lambda x: WATCHLIST_SCORES.get(x, 0),
-        reverse=True
-    )
+        if minutes_since_cleanup > 60:
+            cleanup_memory()
 
-    for symbol in WATCHLIST:
-        try:
+        SYSTEM_STATS["total_scans"] += 1
+        LAST_SCAN_TIME["time"] = datetime.utcnow()
+        
+        # Reset Breadth
+        MARKET_BREADTH["bullish"] = 0
+        MARKET_BREADTH["bearish"] = 0
+
+        # =========================================
+        # STEP 4: DYNAMIC WATCHLIST SORTING
+        # =========================================
+        WATCHLIST.sort(
+            key=lambda x: WATCHLIST_SCORES.get(x, 0),
+            reverse=True
+        )
+
+        for symbol in WATCHLIST:
             # Data fetch logic (Assuming external function or API)
             df = None 
             
@@ -70,9 +131,9 @@ def run_scanner():
                 MARKET_BREADTH["bearish"] += 1
                 continue
 
-        except Exception as e:
-            SYSTEM_STATS["last_error"] = str(e)
-            logger.error(f"Error scanning {symbol}: {e}")
+    except Exception as e:
+        SYSTEM_STATS["last_error"] = str(e)
+        logger.error(f"Error scanning: {e}")
 
 def start_scanner_loop():
     logger.info("PETS Scanner Loop Started.")
