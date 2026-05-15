@@ -167,6 +167,32 @@ def get_regime_performance():
     """
     return execute_query(query, fetchall=True)
 
+def get_total_pnl():
+    query = """
+        SELECT
+            COALESCE(
+                SUM(
+                    exit_price - entry_price
+                ),
+                0
+            )
+        FROM trade_analytics
+        WHERE result IN (
+            'TARGET1_HIT',
+            'TARGET2_HIT',
+            'SL_HIT',
+            'SOS_EXIT',
+            'DEAD_EXIT',
+            'QUALITY_DECAY_EXIT',
+            'CONFIDENCE_EXIT',
+            'MARKET_PANIC_EXIT'
+        )
+    """
+    row = execute_query(query, fetchone=True)
+    if not row:
+        return 0
+    return round(row[0], 2)
+
 def get_recent_trade_failures(limit=10):
     query = """
         SELECT 
