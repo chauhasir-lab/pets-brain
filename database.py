@@ -7,12 +7,14 @@ logger = logging.getLogger(__name__)
 
 def get_connection():
     try:
+        # Standard Neon/Postgres connection string
         conn = pg8000.connect(
             os.environ.get("NEON_DATABASE_URL")
         )
         return conn
     except Exception:
         try:
+            # Fallback parsing for specific environments
             import re
             url = os.environ.get("NEON_DATABASE_URL")
             pattern = r'postgresql://([^:]+):([^@]+)@([^/]+)/(.+)'
@@ -35,6 +37,7 @@ def create_tables():
         return
     cursor = conn.cursor()
 
+    # 1. Raw Signals Table
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS signals (
             id SERIAL PRIMARY KEY,
@@ -49,6 +52,7 @@ def create_tables():
         );
     """)
 
+    # 2. Simple Trade Log (Legacy support)
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS trade_log (
             id SERIAL PRIMARY KEY,
@@ -60,6 +64,7 @@ def create_tables():
         );
     """)
 
+    # 3. Active Management Table (The Brain of PETS)
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS active_signals (
             id SERIAL PRIMARY KEY,
@@ -84,6 +89,7 @@ def create_tables():
         );
     """)
 
+    # 4. Long-term Analytics Table
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS trade_analytics (
             id SERIAL PRIMARY KEY,
@@ -111,17 +117,15 @@ def create_tables():
     conn.commit()
     cursor.close()
     conn.close()
-    logger.info("Tables ready.")
+    logger.info("PETS Database Tables Ready.")
 
 def is_signal_active(symbol):
     try:
         conn = get_connection()
-        if not conn:
-            return False
+        if not conn: return False
         cursor = conn.cursor()
         cursor.execute("""
-            SELECT id
-            FROM active_signals
+            SELECT id FROM active_signals
             WHERE symbol = %s
             AND (
                 status IN ('NEW', 'ACTIVE', 'BOUGHT')
@@ -140,8 +144,7 @@ def is_signal_active(symbol):
 def expire_old_signals():
     try:
         conn = get_connection()
-        if not conn:
-            return
+        if not conn: return
         cursor = conn.cursor()
         cursor.execute("""
             UPDATE active_signals
@@ -158,8 +161,7 @@ def expire_old_signals():
 def get_active_bought_trades():
     try:
         conn = get_connection()
-        if not conn:
-            return []
+        if not conn: return []
         cursor = conn.cursor()
         cursor.execute("""
             SELECT symbol, entry_price, stop_loss, target1, target2, 
@@ -178,19 +180,19 @@ def get_active_bought_trades():
 def close_trade(symbol, result, exit_price=None):
     try:
         conn = get_connection()
-        if not conn:
-            return
+        if not conn: return
         cursor = conn.cursor()
+        
         cursor.execute("""
             SELECT entry_price, stop_loss, target1, target2, quantity, 
                    rr, score, signal_time, setup_type
             FROM active_signals
             WHERE symbol = %s
             AND status IN ('BOUGHT', 'ACTIVE', 'NEW')
-            ORDER BY signal_time DESC
-            LIMIT 1
+            ORDER BY signal_time DESC LIMIT 1
         """, (symbol,))
         trade = cursor.fetchone()
+        
         if not trade:
             cursor.close()
             conn.close()
@@ -200,17 +202,16 @@ def close_trade(symbol, result, exit_price=None):
          rr, score, signal_time, setup_type) = trade
 
         holding_minutes = int((datetime.utcnow() - signal_time).total_seconds() / 60)
-        pnl = 0
-        if exit_price:
-            pnl = round((float(exit_price) - float(entry_price)) * int(quantity), 2)
+        pnl = round((float(exit_price or 0) - float(entry_price)) * int(quantity), 2) if exit_price else 0
 
+        # Silent Sector Fetch
         sector = None
         try:
             from strategy import SECTOR_MAP
             sector = SECTOR_MAP.get(symbol)
-        except:
-            pass
+        except: pass
 
+        # Log into Analytics
         cursor.execute("""
             INSERT INTO trade_analytics
             (symbol, setup_type, market_regime, result, entry_price, exit_price, 
@@ -219,45 +220,25 @@ def close_trade(symbol, result, exit_price=None):
         """, (symbol, setup_type, setup_type, result, entry_price, exit_price, 
               stop_loss, target1, target2, quantity, pnl, rr, holding_minutes, score, sector))
 
+        # Update Active Signal Status
         cursor.execute("""
             UPDATE active_signals
-            SET status = %s,
-                sold = TRUE,
-                last_updated = NOW(),
+            SET status = %s, sold = TRUE, last_updated = NOW(),
                 cooldown_until = NOW() + INTERVAL '45 minutes'
-            WHERE symbol = %s
-            AND status IN ('BOUGHT', 'ACTIVE', 'NEW')
+            WHERE symbol = %s AND status IN ('BOUGHT', 'ACTIVE', 'NEW')
         """, (result, symbol))
 
         conn.commit()
         cursor.close()
         conn.close()
-        logger.info(f"Trade closed: {symbol} | {result}")
+        logger.info(f"Trade finalized: {symbol} | Result: {result}")
     except Exception as e:
         logger.error(f"Close trade error: {e}")
-
-def update_trade_note(symbol, note):
-    try:
-        conn = get_connection()
-        if not conn:
-            return
-        cursor = conn.cursor()
-        cursor.execute("""
-            UPDATE active_signals
-            SET notes = %s, last_updated = NOW()
-            WHERE symbol = %s AND status = 'BOUGHT'
-        """, (note, symbol))
-        conn.commit()
-        cursor.close()
-        conn.close()
-    except Exception as e:
-        logger.error(f"Trade note update error: {e}")
 
 def update_stop_loss(symbol, new_sl):
     try:
         conn = get_connection()
-        if not conn:
-            return
+        if not conn: return
         cursor = conn.cursor()
         cursor.execute("""
             UPDATE active_signals
@@ -267,63 +248,65 @@ def update_stop_loss(symbol, new_sl):
         conn.commit()
         cursor.close()
         conn.close()
-        logger.info(f"SL updated for {symbol}: {new_sl}")
     except Exception as e:
         logger.error(f"SL update error: {e}")
 
-def save_trade_analytics(
-    symbol,
-    result,
-    entry_price,
-    exit_price,
-    stop_loss,
-    target1,
-    target2,
-    rr,
-    score,
-    regime,
-    state
-):
+def save_trade_analytics(symbol, result, entry_price, exit_price, stop_loss, target1, target2, rr, score, regime, state):
     conn = get_connection()
-    if not conn:
-        return
+    if not conn: return
     try:
         cursor = conn.cursor()
         cursor.execute("""
             INSERT INTO trade_analytics (
-                symbol,
-                result,
-                entry_price,
-                exit_price,
-                stop_loss,
-                target1,
-                target2,
-                rr,
-                score,
-                market_regime,
-                final_state,
-                created_at
+                symbol, result, entry_price, exit_price, stop_loss, 
+                target1, target2, rr, score, market_regime, final_state, created_at
             )
-            VALUES (
-                %s, %s, %s, %s, %s,
-                %s, %s, %s, %s, %s,
-                %s, NOW()
-            )
-        """, (
-            symbol,
-            result,
-            entry_price,
-            exit_price,
-            stop_loss,
-            target1,
-            target2,
-            rr,
-            score,
-            regime,
-            state
-        ))
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW())
+        """, (symbol, result, entry_price, exit_price, stop_loss, target1, target2, rr, score, regime, state))
         conn.commit()
         cursor.close()
         conn.close()
     except Exception as e:
-        logger.error(f"Trade analytics save error: {e}")
+        logger.error(f"Manual analytics save error: {e}")
+
+def get_trade_performance_summary():
+    """Fetches win/loss summary for the last 7 days."""
+    conn = get_connection()
+    if not conn:
+        return None
+
+    try:
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT 
+                COUNT(*) as total,
+                SUM(CASE WHEN result IN ('TARGET1_HIT', 'TARGET2_HIT') THEN 1 ELSE 0 END) as wins,
+                SUM(CASE WHEN result IN (
+                    'SL_HIT', 'SOS_EXIT', 'DEAD_EXIT', 
+                    'QUALITY_DECAY_EXIT', 'CONFIDENCE_EXIT', 'MARKET_PANIC_EXIT'
+                ) THEN 1 ELSE 0 END) as losses
+            FROM trade_analytics
+            WHERE created_at >= NOW() - INTERVAL '7 days'
+        """)
+
+        row = cursor.fetchone()
+        cursor.close()
+        conn.close()
+
+        if not row or row[0] == 0:
+            return {"total": 0, "wins": 0, "losses": 0, "win_rate": 0}
+
+        total = int(row[0])
+        wins = int(row[1] or 0)
+        losses = int(row[2] or 0)
+        win_rate = round((wins / total) * 100, 2) if total > 0 else 0
+
+        return {
+            "total": total,
+            "wins": wins,
+            "losses": losses,
+            "win_rate": win_rate
+        }
+    except Exception as e:
+        logger.error(f"Performance summary calculation error: {e}")
+        return None
