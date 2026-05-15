@@ -2,7 +2,7 @@ import logging
 import os
 import requests
 import time
-from datetime import datetime  # Step 5: Import datetime
+from datetime import datetime
 
 logger = logging.getLogger(__name__)
 
@@ -48,10 +48,10 @@ def handle_command(command):
         close_trade,
         update_trade_note,
         get_trade_performance_summary,
-        execute_query  # Use the new safe wrapper
+        execute_query
     )
-    # Step 3: Import LAST_SCAN_TIME
-    from scanner import run_scanner, LAST_SCAN_TIME
+    # Import SYSTEM_STATS and LAST_SCAN_TIME
+    from scanner import run_scanner, LAST_SCAN_TIME, SYSTEM_STATS
 
     parts = command.split()
     if not parts: return
@@ -60,7 +60,6 @@ def handle_command(command):
 
     # --- COMMANDS LOGIC ---
     
-    # STEP 4: /health command integration
     if base == "/health":
         last_scan = LAST_SCAN_TIME.get("time")
         if not last_scan:
@@ -68,7 +67,6 @@ def handle_command(command):
             return
 
         minutes_ago = round((datetime.utcnow() - last_scan).total_seconds() / 60, 2)
-        
         health_status = "ACTIVE" if minutes_ago < 10 else "STALE"
         icon = "✅" if health_status == "ACTIVE" else "⚠️"
 
@@ -77,6 +75,24 @@ def handle_command(command):
             f"Last Scan: `{minutes_ago}` mins ago\n"
             f"Scanner Status: {icon} `{health_status}`\n"
             f"Monitoring Engine: 🚀 `RUNNING`"
+        )
+        send_message(msg)
+
+    # --- STEP 6: DIAGNOSTICS COMMAND ---
+    elif base == "/diagnostics":
+        last_signal = SYSTEM_STATS.get("last_signal_time")
+        
+        if last_signal:
+            signal_age = f"{round((datetime.utcnow() - last_signal).total_seconds() / 60, 2)} mins ago"
+        else:
+            signal_age = "No signals yet"
+
+        msg = (
+            f"🧠 *PETS DIAGNOSTICS*\n\n"
+            f"Total Scans: `{SYSTEM_STATS['total_scans']}`\n"
+            f"Signals Generated: `{SYSTEM_STATS['successful_signals']}`\n"
+            f"Last Signal: `{signal_age}`\n"
+            f"Last Error: `{SYSTEM_STATS['last_error'] or 'None'}`"
         )
         send_message(msg)
 
@@ -114,7 +130,6 @@ def handle_command(command):
 
     elif base == "/signals":
         try:
-            # Using execute_query for better stability
             rows = execute_query("""
                 SELECT symbol, action, entry_price, stop_loss, target, confidence, created_at 
                 FROM signals ORDER BY created_at DESC LIMIT 5
@@ -139,13 +154,11 @@ def handle_command(command):
             return
         symbol = parts[1].upper()
         try:
-            # Using execute_query to mark bought
             query = """
                 UPDATE active_signals 
                 SET status = 'BOUGHT', bought = TRUE, last_updated = NOW() 
                 WHERE symbol = %s AND status = 'NEW'
             """
-            # We check rowcount via custom logic or just execute
             execute_query(query, (symbol,), commit=True)
             send_message(f"✅ Trade marked *BOUGHT*: {symbol}")
         except Exception as e:
@@ -172,6 +185,7 @@ def handle_command(command):
         send_message(
             "📘 *PETS COMMANDS*\n\n"
             "`/health` - System Pulse Check\n"
+            "`/diagnostics` - Detailed Scan Stats\n"
             "`/status` - Check Engine\n"
             "`/scan` - Trigger Scanner\n"
             "`/performance` - Win/Loss Stats\n"
