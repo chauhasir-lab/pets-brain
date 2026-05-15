@@ -50,8 +50,14 @@ def handle_command(command):
         get_trade_performance_summary,
         execute_query
     )
-    # Import SYSTEM_STATS, LAST_SCAN_TIME and MARKET_BREADTH
-    from scanner import run_scanner, LAST_SCAN_TIME, SYSTEM_STATS, MARKET_BREADTH
+    # Import SYSTEM_STATS, LAST_SCAN_TIME, MARKET_BREADTH and PORTFOLIO_HEAT
+    from scanner import (
+        run_scanner, 
+        LAST_SCAN_TIME, 
+        SYSTEM_STATS, 
+        MARKET_BREADTH,
+        PORTFOLIO_HEAT
+    )
 
     parts = command.split()
     if not parts: return
@@ -95,7 +101,9 @@ def handle_command(command):
             f"Last Error: `{SYSTEM_STATS['last_error'] or 'None'}`\n\n"
             f"📊 *Market Breadth:*\n"
             f"Bullish Breadth: `{MARKET_BREADTH['bullish']}`\n"
-            f"Bearish Breadth: `{MARKET_BREADTH['bearish']}`"
+            f"Bearish Breadth: `{MARKET_BREADTH['bearish']}`\n\n"
+            f"🔥 *Risk Metrics:*\n"
+            f"Portfolio Heat: `₹{round(PORTFOLIO_HEAT['active_risk'], 2)}`"
         )
         send_message(msg)
 
