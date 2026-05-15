@@ -95,6 +95,15 @@ def is_signal_active(symbol):
     result = execute_query(query, (symbol,), fetchone=True)
     return result is not None
 
+def mark_trade_as_bought(symbol):
+    query = """
+        UPDATE active_signals
+        SET status = 'BOUGHT'
+        WHERE symbol = %s
+        AND status = 'NEW'
+    """
+    execute_query(query, (symbol,), commit=True)
+
 def expire_old_signals():
     query = """
         UPDATE active_signals SET status = 'EXPIRED'
