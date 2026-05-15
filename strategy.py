@@ -4,7 +4,7 @@ import logging
 from datetime import datetime, timedelta
 from database import get_connection
 # STEP 3: Added import
-from dhandata import get_higher_timeframe_data
+from dhan_data import get_higher_timeframe_data
 
 logger = logging.getLogger(__name__)
 
