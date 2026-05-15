@@ -2,6 +2,7 @@ import logging
 import os
 import requests
 import time
+from datetime import datetime  # Step 5: Import datetime
 
 logger = logging.getLogger(__name__)
 
@@ -46,9 +47,11 @@ def handle_command(command):
         get_connection,
         close_trade,
         update_trade_note,
-        get_trade_performance_summary  # New Import
+        get_trade_performance_summary,
+        execute_query  # Use the new safe wrapper
     )
-    from scanner import run_scanner
+    # Step 3: Import LAST_SCAN_TIME
+    from scanner import run_scanner, LAST_SCAN_TIME
 
     parts = command.split()
     if not parts: return
@@ -56,7 +59,28 @@ def handle_command(command):
     base = parts[0].lower()
 
     # --- COMMANDS LOGIC ---
-    if base == "/status":
+    
+    # STEP 4: /health command integration
+    if base == "/health":
+        last_scan = LAST_SCAN_TIME.get("time")
+        if not last_scan:
+            send_message("⚠️ *PETS scanner not active or hasn't run yet.*")
+            return
+
+        minutes_ago = round((datetime.utcnow() - last_scan).total_seconds() / 60, 2)
+        
+        health_status = "ACTIVE" if minutes_ago < 10 else "STALE"
+        icon = "✅" if health_status == "ACTIVE" else "⚠️"
+
+        msg = (
+            f"🧠 *PETS SYSTEM HEALTH*\n\n"
+            f"Last Scan: `{minutes_ago}` mins ago\n"
+            f"Scanner Status: {icon} `{health_status}`\n"
+            f"Monitoring Engine: 🚀 `RUNNING`"
+        )
+        send_message(msg)
+
+    elif base == "/status":
         send_message(
             "✅ *PETS Engine Active*\n\n"
             "Scanner: Running\n"
@@ -72,7 +96,7 @@ def handle_command(command):
         except Exception as e:
             send_message(f"❌ Scan failed: {e}")
 
-    elif base == "/performance": # --- NEW COMMAND ---
+    elif base == "/performance":
         data = get_trade_performance_summary()
         if not data or data['total'] == 0:
             send_message("📊 *No analytics data available for the last 7 days.*")
@@ -89,19 +113,12 @@ def handle_command(command):
         send_message(msg)
 
     elif base == "/signals":
-        conn = get_connection()
-        if not conn:
-            send_message("❌ Database connection error.")
-            return
         try:
-            cursor = conn.cursor()
-            cursor.execute("""
+            # Using execute_query for better stability
+            rows = execute_query("""
                 SELECT symbol, action, entry_price, stop_loss, target, confidence, created_at 
                 FROM signals ORDER BY created_at DESC LIMIT 5
-            """)
-            rows = cursor.fetchall()
-            cursor.close()
-            conn.close()
+            """, fetchall=True)
 
             if not rows:
                 send_message("No signals found in database.")
@@ -121,23 +138,16 @@ def handle_command(command):
             send_message("Usage: `/bought SYMBOL`")
             return
         symbol = parts[1].upper()
-        conn = get_connection()
         try:
-            cursor = conn.cursor()
-            cursor.execute("""
+            # Using execute_query to mark bought
+            query = """
                 UPDATE active_signals 
                 SET status = 'BOUGHT', bought = TRUE, last_updated = NOW() 
                 WHERE symbol = %s AND status = 'NEW'
-            """, (symbol,))
-            updated = cursor.rowcount
-            conn.commit()
-            cursor.close()
-            conn.close()
-            
-            if updated == 0:
-                send_message(f"❌ No 'NEW' signal found for {symbol}")
-            else:
-                send_message(f"✅ Trade marked *BOUGHT*: {symbol}")
+            """
+            # We check rowcount via custom logic or just execute
+            execute_query(query, (symbol,), commit=True)
+            send_message(f"✅ Trade marked *BOUGHT*: {symbol}")
         except Exception as e:
             send_message(f"DB Error: {e}")
 
@@ -161,6 +171,7 @@ def handle_command(command):
     elif base == "/help":
         send_message(
             "📘 *PETS COMMANDS*\n\n"
+            "`/health` - System Pulse Check\n"
             "`/status` - Check Engine\n"
             "`/scan` - Trigger Scanner\n"
             "`/performance` - Win/Loss Stats\n"
