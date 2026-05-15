@@ -3,20 +3,18 @@ import os
 import logging
 import re
 from datetime import datetime
-from contextlib import closing  # Step 1: Added closing for safety
+from contextlib import closing
 
 logger = logging.getLogger(__name__)
 
 def get_connection():
     try:
-        # Standard Neon/Postgres connection string
         conn = pg8000.connect(
             os.environ.get("NEON_DATABASE_URL")
         )
         return conn
     except Exception:
         try:
-            # Fallback parsing for specific environments
             url = os.environ.get("NEON_DATABASE_URL")
             pattern = r'postgresql://([^:]+):([^@]+)@([^/]+)/(.+)'
             match = re.match(pattern, url)
@@ -32,7 +30,6 @@ def get_connection():
             logger.error(f"Database connection failed: {e2}")
             return None
 
-# STEP 2: Database Safety Wrapper
 def execute_query(query, params=None, fetchone=False, fetchall=False, commit=False):
     conn = get_connection()
     if not conn:
@@ -56,7 +53,6 @@ def execute_query(query, params=None, fetchone=False, fetchall=False, commit=Fal
         conn.close()
 
 def create_tables():
-    # Table creation queries
     queries = [
         """CREATE TABLE IF NOT EXISTS signals (
             id SERIAL PRIMARY KEY, symbol TEXT NOT NULL, action TEXT NOT NULL,
@@ -145,8 +141,18 @@ def get_trade_performance_summary():
         "win_rate": round((wins / total) * 100, 2)
     }
 
+def save_trade_analytics(symbol, result, entry_price, exit_price, stop_loss, target1, target2, rr, score, regime, state):
+    query = """
+        INSERT INTO trade_analytics (
+            symbol, result, entry_price, exit_price, stop_loss, 
+            target1, target2, rr, confidence, market_regime, final_state, created_at
+        )
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW())
+    """
+    params = (symbol, result, entry_price, exit_price, stop_loss, target1, target2, rr, score, regime, state)
+    execute_query(query, params, commit=True)
+
 def close_trade(symbol, result, exit_price=None):
-    # Fetch trade details first
     fetch_query = """
         SELECT entry_price, stop_loss, target1, target2, quantity, 
                rr, score, signal_time, setup_type
@@ -163,17 +169,20 @@ def close_trade(symbol, result, exit_price=None):
     holding_minutes = int((datetime.utcnow() - signal_time).total_seconds() / 60)
     pnl = round((float(exit_price or 0) - float(entry_price)) * int(quantity), 2) if exit_price else 0
 
-    # Log into Analytics
-    analytics_query = """
-        INSERT INTO trade_analytics
-        (symbol, setup_type, market_regime, result, entry_price, exit_price, 
-         stop_loss, target1, target2, quantity, pnl, rr, holding_minutes, confidence)
-        VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
-    """
-    execute_query(analytics_query, (symbol, setup_type, setup_type, result, entry_price, exit_price, 
-                                   stop_loss, target1, target2, quantity, pnl, rr, holding_minutes, score), commit=True)
+    save_trade_analytics(
+        symbol=symbol,
+        result=result,
+        entry_price=entry_price,
+        exit_price=exit_price,
+        stop_loss=stop_loss,
+        target1=target1,
+        target2=target2,
+        rr=rr,
+        score=score,
+        regime=setup_type,
+        state=result
+    )
 
-    # Update Status
     status_query = """
         UPDATE active_signals
         SET status = %s, sold = TRUE, last_updated = NOW(),
