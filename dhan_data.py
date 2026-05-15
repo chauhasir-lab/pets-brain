@@ -1,5 +1,6 @@
 import pandas as pd
 import logging
+from datetime import datetime, timedelta
 from dhanhq import dhanhq
 import os
 
@@ -48,11 +49,16 @@ def get_dhan_data(symbol):
             logger.warning(f"No security ID for {symbol}")
             return None
 
+        today = datetime.now().strftime("%Y-%m-%d")
+        from_date = (datetime.now() - timedelta(days=5)).strftime("%Y-%m-%d")
+
         data = dhan.intraday_minute_data(
             security_id=security_id,
             exchange_segment="NSE_EQ",
-            instrument_type="EQ",
-            interval=15
+            instrument_type="EQUITY",
+            interval=15,
+            from_date=from_date,
+            to_date=today
         )
 
         candles = data.get("data")
