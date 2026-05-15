@@ -1,6 +1,8 @@
 import pandas as pd
 import numpy as np
 import logging
+from datetime import datetime
+from time import time
 
 logger = logging.getLogger(__name__)
 
@@ -85,6 +87,20 @@ def analyze_setup(df, symbol):
     }
     
     score += regime_score_bonus.get(regime, 0)
+    
+    # Adaptive regime confidence boost
+    regime_confidence = {
+        "TRENDING": 0.65,
+        "NORMAL": 0.55,
+        "HIGH_VOLATILITY": 0.45,
+        "SIDEWAYS": 0.35
+    }.get(regime, 0.5)
+
+    if regime_confidence >= 0.65:
+        score += 10
+    elif regime_confidence < 0.45:
+        score -= 10
+
     reasons.append(f"Regime {regime}")
 
     # --- TECHNICAL SCORING ---
