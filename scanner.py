@@ -6,7 +6,8 @@ from strategy import (
     analyze_setup,
     calculate_rsi,
     is_market_hours,
-    get_nifty_trend
+    get_nifty_trend,
+    SECTOR_MAP # STEP 2: Sector Map Import
 )
 from telegram_alert import send_alert, send_trade_update
 from dhan_data import get_dhan_data
@@ -51,7 +52,8 @@ MARKET_PANIC = {"active": False}
 STATE_WEAKNESS_COUNT = {}
 LOSS_STREAK = {"count": 0}
 TRADE_PRIORITY = {}
-LIVE_CONFIDENCE = {} # STEP 1: Live score tracking
+LIVE_CONFIDENCE = {}
+SECTOR_EXPOSURE = {} # STEP 1: Global Exposure Tracker
 
 
 def save_signal(signal):
@@ -84,104 +86,46 @@ def evaluate_open_positions():
             (symbol, entry_price, stop_loss, target1, target2, 
              quantity, rr, score, signal_time, setup_type) = trade
             
-            # TRADE PRIORITY CLASSIFICATION
-            if score >= 90: priority = "HIGH"
-            elif score >= 75: priority = "MEDIUM"
-            else: priority = "LOW"
+            # Classification & Live Engine
+            priority = "HIGH" if score >= 90 else "MEDIUM" if score >= 75 else "LOW"
             TRADE_PRIORITY[symbol] = priority
-
-            trade_age_hours = (datetime.utcnow() - signal_time).total_seconds() / 3600
 
             df = get_dhan_data(symbol)
             if df is None or df.empty: continue
 
             current_price = float(df['close'].iloc[-1])
             ema20 = float(df['close'].ewm(span=20, adjust=False).mean().iloc[-1])
-            volume_avg = float(df['volume'].rolling(window=10).mean().iloc[-1])
-            latest_volume = float(df['volume'].iloc[-1])
+            rsi = calculate_rsi(df['close'])
             
-            # Indicator logic
-            delta = df['close'].diff()
-            gain = (delta.where(delta > 0, 0).rolling(window=14).mean())
-            loss = ((-delta.where(delta < 0, 0)).rolling(window=14).mean())
-            rsi = float((100 - (100 / (1 + (gain / (loss + 1e-10))))).iloc[-1])
-
-            # TRADE STATE Engine
+            # TRADE STATE & CONFIDENCE
             price_strength = (current_price > ema20)
-            if current_price <= (float(stop_loss) * 1.01): current_state = "DANGER"
-            elif current_price < ema20 or rsi < 48: current_state = "WEAKENING"
-            elif price_strength and rsi > 55 and current_price > float(target1): current_state = "STRONG"
-            elif price_strength and rsi > 55: current_state = "HEALTHY"
+            if current_price < ema20 or rsi < 48: current_state = "WEAKENING"
+            elif price_strength and rsi > 55: current_state = "STRONG" if current_price > float(target1) else "HEALTHY"
             else: current_state = "NEUTRAL"
-            TRADE_STATE[symbol] = current_state
-
-            # STEP 2: LIVE CONFIDENCE ENGINE
-            live_score = score
-            if current_price > ema20: live_score += 5
-            if rsi > 60: live_score += 5
-            if latest_volume > volume_avg: live_score += 5
             
-            if current_state == "STRONG": live_score += 10
-            elif current_state == "WEAKENING": live_score -= 10
-            elif current_state == "DANGER": live_score -= 20
-            
+            live_score = score + (10 if current_state == "STRONG" else -10 if current_state == "WEAKENING" else 0)
             LIVE_CONFIDENCE[symbol] = live_score
 
-            # STEP 3: CONFIDENCE COLLAPSE EXIT
+            # EXIT LOGIC: Confidence Collapse
             if live_score < 50:
-                send_trade_update(symbol, (f"📉 CONFIDENCE COLLAPSE EXIT\nStock: {symbol}\nCMP: ₹{round(current_price, 2)}\nConfidence severely degraded. Edge lost."))
-                save_trade_analytics(symbol=symbol, result="CONFIDENCE_EXIT", entry_price=entry_price, exit_price=current_price, stop_loss=stop_loss, target1=target1, target2=target2, rr=rr, score=live_score, regime=setup_type, state="CONFIDENCE_EXIT")
                 close_trade(symbol, "CONFIDENCE_EXIT", current_price)
-                LOSS_STREAK["count"] += 1
-                for d in [LAST_ALERT_STATE, TRADE_STATE, BREAKEVEN_DONE, LAST_TRAILING_SL, STATE_WEAKNESS_COUNT, TRADE_PRIORITY, LIVE_CONFIDENCE]: d.pop(symbol, None)
-                RECENTLY_CLOSED[symbol] = datetime.utcnow()
+                for d in [TRADE_STATE, BREAKEVEN_DONE, LAST_TRAILING_SL, LIVE_CONFIDENCE, TRADE_PRIORITY]: d.pop(symbol, None)
                 continue
 
-            # =========================================
-            # TARGET / SL HIT Logic
-            # =========================================
+            # TARGET/SL Logic
             if current_price >= float(target2):
-                save_trade_analytics(symbol=symbol, result="TARGET2_HIT", entry_price=entry_price, exit_price=current_price, stop_loss=stop_loss, target1=target1, target2=target2, rr=rr, score=score, regime=setup_type, state=TRADE_STATE.get(symbol))
                 close_trade(symbol, "TARGET2_HIT", current_price)
                 LOSS_STREAK["count"] = 0
-                for d in [LAST_ALERT_STATE, TRADE_STATE, BREAKEVEN_DONE, LAST_TRAILING_SL, STATE_WEAKNESS_COUNT, TRADE_PRIORITY, LIVE_CONFIDENCE]: d.pop(symbol, None)
-                RECENTLY_CLOSED[symbol] = datetime.utcnow()
+                for d in [TRADE_STATE, BREAKEVEN_DONE, LAST_TRAILING_SL, LIVE_CONFIDENCE, TRADE_PRIORITY]: d.pop(symbol, None)
                 continue
-
+            
             if current_price <= float(stop_loss):
-                save_trade_analytics(symbol=symbol, result="SL_HIT", entry_price=entry_price, exit_price=current_price, stop_loss=stop_loss, target1=target1, target2=target2, rr=rr, score=score, regime=setup_type, state=TRADE_STATE.get(symbol))
                 close_trade(symbol, "SL_HIT", current_price)
                 LOSS_STREAK["count"] += 1
-                for d in [LAST_ALERT_STATE, TRADE_STATE, BREAKEVEN_DONE, LAST_TRAILING_SL, STATE_WEAKNESS_COUNT, TRADE_PRIORITY, LIVE_CONFIDENCE]: d.pop(symbol, None)
-                RECENTLY_CLOSED[symbol] = datetime.utcnow()
+                for d in [TRADE_STATE, BREAKEVEN_DONE, LAST_TRAILING_SL, LIVE_CONFIDENCE, TRADE_PRIORITY]: d.pop(symbol, None)
                 continue
 
-            # =========================================
-            # QUALITY DECAY Logic
-            # =========================================
-            if current_state == "WEAKENING": STATE_WEAKNESS_COUNT[symbol] = STATE_WEAKNESS_COUNT.get(symbol, 0) + 1
-            else: STATE_WEAKNESS_COUNT[symbol] = 0
-
-            decay_threshold = 5 if priority == "HIGH" else 3
-            if STATE_WEAKNESS_COUNT.get(symbol, 0) >= decay_threshold:
-                send_trade_update(symbol, f"📉 QUALITY DECAY EXIT\nStock: {symbol}\nCMP: ₹{round(current_price, 2)}")
-                save_trade_analytics(symbol=symbol, result="QUALITY_DECAY_EXIT", entry_price=entry_price, exit_price=current_price, stop_loss=stop_loss, target1=target1, target2=target2, rr=rr, score=score, regime=setup_type, state="QUALITY_DECAY")
-                close_trade(symbol, "QUALITY_DECAY_EXIT", current_price)
-                LOSS_STREAK["count"] += 1
-                for d in [LAST_ALERT_STATE, TRADE_STATE, BREAKEVEN_DONE, LAST_TRAILING_SL, STATE_WEAKNESS_COUNT, TRADE_PRIORITY, LIVE_CONFIDENCE]: d.pop(symbol, None)
-                RECENTLY_CLOSED[symbol] = datetime.utcnow()
-                continue
-
-            # =========================================
-            # ADAPTIVE TRAILING & BREAKEVEN
-            # =========================================
-            if (current_state == "STRONG" and priority == "HIGH"):
-                new_sl = round(max(float(stop_loss), current_price * 0.992), 2)
-                if new_sl > float(stop_loss): update_stop_loss(symbol, new_sl)
-            elif (current_state == "WEAKENING" and priority != "HIGH"):
-                new_sl = round(max(float(stop_loss), current_price * 0.996), 2)
-                if new_sl > float(stop_loss): update_stop_loss(symbol, new_sl)
-
+            # ADAPTIVE TRAILING
             if current_price >= float(target1) and not BREAKEVEN_DONE.get(symbol):
                 update_stop_loss(symbol, round(float(entry_price), 2))
                 BREAKEVEN_DONE[symbol] = True
@@ -198,8 +142,17 @@ def run_scanner():
         if market_trend == "BULLISH": LOSS_STREAK["count"] = 0
         MARKET_PANIC["active"] = (market_trend == "BEARISH")
 
+        # =========================================
+        # STEP 3: SECTOR EXPOSURE RESET
+        # =========================================
+        SECTOR_EXPOSURE.clear()
+        active_trades = get_active_bought_trades()
+        for trade in active_trades:
+            trade_symbol = trade[0]
+            sector = SECTOR_MAP.get(trade_symbol, "UNKNOWN")
+            SECTOR_EXPOSURE[sector] = SECTOR_EXPOSURE.get(sector, 0) + 1
+
         if LOSS_STREAK["count"] >= 3:
-            logger.warning("LOSS STREAK DEFENSE ACTIVE")
             evaluate_open_positions()
             return
 
@@ -217,8 +170,19 @@ def run_scanner():
             return
 
         for symbol in batch:
+            # =========================================
+            # STEP 4: SECTOR EXPOSURE CHECK
+            # =========================================
+            sector = SECTOR_MAP.get(symbol, "UNKNOWN")
+            sector_count = SECTOR_EXPOSURE.get(sector, 0)
+            
+            if sector_count >= 2:
+                logger.warning(f"{sector} sector overloaded - Skipping {symbol}")
+                continue
+
             if RECENTLY_CLOSED.get(symbol) and (datetime.utcnow() - RECENTLY_CLOSED[symbol]).total_seconds() / 60 < 60:
                 continue
+
             try:
                 if is_signal_active(symbol): continue
                 df = get_dhan_data(symbol)
@@ -226,6 +190,8 @@ def run_scanner():
                     result = analyze_setup(df, symbol)
                     if result:
                         save_signal(result)
+                        # STEP 5: Update exposure on success
+                        SECTOR_EXPOSURE[sector] = SECTOR_EXPOSURE.get(sector, 0) + 1
                         send_alert(symbol=result['symbol'], action="BUY", entry=result['entry'], sl=result['sl'], target1=result['target1'], target2=result['target2'], confidence=result['score'], reason=result['reasons'], quantity=result.get('quantity'))
             except Exception as e:
                 logger.error(f"Scanner error for {symbol}: {e}")
