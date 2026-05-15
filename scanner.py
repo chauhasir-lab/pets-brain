@@ -2,7 +2,7 @@ import time
 import logging
 from datetime import datetime
 from strategy import analyze_setup
-from database import execute_query
+from database import execute_query, get_regime_performance
 
 logger = logging.getLogger(__name__)
 
@@ -10,6 +10,7 @@ logger = logging.getLogger(__name__)
 # INITIALIZATION & STEP 1: WATCHLIST SCORES
 # =========================================
 WATCHLIST_SCORES = {}
+REGIME_CONFIDENCE = {}
 
 PORTFOLIO_HEAT = {
     "active_risk": 0.0,
@@ -92,6 +93,19 @@ def run_scanner():
 
         if minutes_since_cleanup > 60:
             cleanup_memory()
+
+        # =========================================
+        # REGIME LEARNING ENGINE
+        # =========================================
+        rows = get_regime_performance()
+        if rows:
+            for row in rows:
+                regime = row[0]
+                total = row[1]
+                wins = row[2] or 0
+
+                if total >= 5:
+                    REGIME_CONFIDENCE[regime] = (wins / total)
 
         SYSTEM_STATS["total_scans"] += 1
         LAST_SCAN_TIME["time"] = datetime.utcnow()
