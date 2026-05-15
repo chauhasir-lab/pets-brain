@@ -26,7 +26,12 @@ from database import (
 
 logger = logging.getLogger(__name__)
 
-# --- STEP 1: SYSTEM STATS ---
+# --- STEP 1: MARKET BREADTH & SYSTEM STATS ---
+MARKET_BREADTH = {
+    "bullish": 0,
+    "bearish": 0
+}
+
 SYSTEM_STATS = {
     "last_signal_time": None,
     "last_error": None,
@@ -142,8 +147,11 @@ def run_scanner():
     if SCAN_LOCK["running"] or not is_market_hours(): return
     SCAN_LOCK["running"] = True
     try:
+        # --- STEP 2: RESET BREADTH & STATS ---
+        MARKET_BREADTH["bullish"] = 0
+        MARKET_BREADTH["bearish"] = 0
+        
         LAST_SCAN_TIME["time"] = datetime.utcnow()
-        # --- STEP 2: TOTAL SCANS ---
         SYSTEM_STATS["total_scans"] += 1
 
         market_trend = get_nifty_trend()
@@ -188,11 +196,30 @@ def run_scanner():
             try:
                 if is_signal_active(symbol): continue
                 df = get_dhan_data(symbol)
-                if df is not None:
+                
+                # --- STEP 3: CALCULATE MARKET BREADTH ---
+                if df is not None and len(df) > 20:
+                    ema20 = (df['close'].ewm(span=20, adjust=False).mean().iloc[-1])
+                    current_price = float(df['close'].iloc[-1])
+
+                    if current_price > ema20:
+                        MARKET_BREADTH["bullish"] += 1
+                    else:
+                        MARKET_BREADTH["bearish"] += 1
+
+                    # --- STEP 4: MARKET BREADTH FILTER ---
+                    total_breadth = MARKET_BREADTH["bullish"] + MARKET_BREADTH["bearish"]
+                    
+                    if total_breadth > 0:
+                        bullish_ratio = MARKET_BREADTH["bullish"] / total_breadth
+                        if bullish_ratio < 0.55:
+                            logger.warning(f"Weak market breadth detected for {symbol} (Ratio: {bullish_ratio:.2f})")
+                            continue
+
+                    # Analyze setup after breadth check
                     result = analyze_setup(df, symbol)
                     if result:
                         save_signal(result)
-                        # --- STEP 3: SUCCESS STATS ---
                         SYSTEM_STATS["successful_signals"] += 1
                         SYSTEM_STATS["last_signal_time"] = datetime.utcnow()
                         
@@ -200,6 +227,7 @@ def run_scanner():
                         send_alert(symbol=result['symbol'], action="BUY", entry=result['entry'], 
                                    sl=result['sl'], target1=result['target1'], target2=result['target2'], 
                                    confidence=result['score'], reason=result['reasons'], quantity=result.get('quantity'))
+            
             except Exception as e:
                 logger.error(f"Scanner error for {symbol}: {e}")
                 SYSTEM_STATS["last_error"] = str(e)
