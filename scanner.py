@@ -1,6 +1,6 @@
 import pandas as pd
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta # STEP 2: Updated import
 
 from strategy import analyze_setup, calculate_rsi, is_market_hours
 from telegram_alert import send_alert, send_trade_update
@@ -32,11 +32,7 @@ WATCHLIST = [
     "VEDL", "UPL", "SHREECEM", "SBILIFE", "HDFCLIFE"
 ]
 
-KILL_SWITCH = {
-    "losses": 0,
-    "active": True
-}
-
+KILL_SWITCH = {"losses": 0, "active": True}
 BATCH_INDEX = [0]
 SCAN_LOCK = {"running": False}
 MAX_ACTIVE_TRADES = 3
@@ -44,7 +40,8 @@ MAX_ACTIVE_TRADES = 3
 LAST_ALERT_STATE = {}
 TRADE_STATE = {}
 BREAKEVEN_DONE = {}
-LAST_TRAILING_SL = {}  # STEP 1: Added trailing SL tracker
+LAST_TRAILING_SL = {}
+RECENTLY_CLOSED = {} # STEP 1: Cooldown memory tracker
 
 
 def save_signal(signal):
@@ -85,21 +82,18 @@ def evaluate_open_positions():
             current_price = float(df['close'].iloc[-1])
             ema20 = float(df['close'].ewm(span=20, adjust=False).mean().iloc[-1])
 
-            # RSI logic
+            # Indicator Logic
             delta = df['close'].diff()
             gain = (delta.where(delta > 0, 0).rolling(window=14).mean())
             loss = ((-delta.where(delta < 0, 0)).rolling(window=14).mean())
             rs = gain / (loss + 1e-10)
             rsi = float((100 - (100 / (1 + rs))).iloc[-1])
 
-            volume_avg = float(df['volume'].rolling(window=10).mean().iloc[-1])
-            latest_volume = float(df['volume'].iloc[-1])
-
             # =========================================
             # EXIT LOGIC - TARGET 2
             # =========================================
             if current_price >= float(target2):
-                send_trade_update(symbol, f"🚀 TARGET 2 HIT\nStock: {symbol}\nCMP: ₹{round(current_price, 2)}\nFull target achieved.")
+                send_trade_update(symbol, f"🚀 TARGET 2 HIT\nStock: {symbol}\nCMP: ₹{round(current_price, 2)}")
                 
                 save_trade_analytics(
                     symbol=symbol, result="TARGET2_HIT", entry_price=entry_price, exit_price=current_price,
@@ -109,11 +103,13 @@ def evaluate_open_positions():
 
                 close_trade(symbol, "TARGET2_HIT", current_price)
                 
-                # STEP 4: Cleanup
+                # Cleanup and Cooldown
                 LAST_ALERT_STATE.pop(symbol, None)
                 TRADE_STATE.pop(symbol, None)
                 BREAKEVEN_DONE.pop(symbol, None)
                 LAST_TRAILING_SL.pop(symbol, None)
+                
+                RECENTLY_CLOSED[symbol] = datetime.utcnow() # STEP 3: Add to cooldown
                 continue
 
             # =========================================
@@ -122,15 +118,13 @@ def evaluate_open_positions():
             if current_price >= float(target1) and not BREAKEVEN_DONE.get(symbol):
                 new_sl = round(float(entry_price), 2)
                 update_stop_loss(symbol, new_sl)
-                send_trade_update(symbol, f"🎯 TARGET 1 HIT\nStock: {symbol}\nCMP: ₹{round(current_price, 2)}\nSL shifted to breakeven.")
-                update_trade_note(symbol, "Target 1 achieved | Breakeven activated")
                 BREAKEVEN_DONE[symbol] = True
 
             # =========================================
             # STOP LOSS
             # =========================================
             if current_price <= float(stop_loss):
-                send_trade_update(symbol, f"❌ STOP LOSS HIT\nStock: {symbol}\nCMP: ₹{round(current_price, 2)}\nExit position.")
+                send_trade_update(symbol, f"❌ STOP LOSS HIT\nStock: {symbol}\nCMP: ₹{round(current_price, 2)}")
 
                 save_trade_analytics(
                     symbol=symbol, result="SL_HIT", entry_price=entry_price, exit_price=current_price,
@@ -140,73 +134,37 @@ def evaluate_open_positions():
 
                 close_trade(symbol, "SL_HIT", current_price)
                 
-                # STEP 4: Cleanup
+                # Cleanup and Cooldown
                 LAST_ALERT_STATE.pop(symbol, None)
                 TRADE_STATE.pop(symbol, None)
                 BREAKEVEN_DONE.pop(symbol, None)
                 LAST_TRAILING_SL.pop(symbol, None)
+                
+                RECENTLY_CLOSED[symbol] = datetime.utcnow() # STEP 4: Add to cooldown
                 continue
 
             # =========================================
-            # TRADE STATE ENGINE
+            # TRAILING LOGIC (STRONG/WEAKENING)
             # =========================================
             price_strength = (current_price > ema20)
-            volume_strength = (latest_volume > volume_avg)
             momentum_strength = (rsi > 55)
 
-            if current_price <= (float(stop_loss) * 1.01):
-                current_state = "DANGER"
-            elif current_price < ema20 or rsi < 48:
-                current_state = "WEAKENING"
-            elif price_strength and volume_strength and momentum_strength and current_price > float(target1):
-                current_state = "STRONG"
-            elif price_strength and momentum_strength:
-                current_state = "HEALTHY"
-            else:
-                current_state = "NEUTRAL"
+            if current_price <= (float(stop_loss) * 1.01): current_state = "DANGER"
+            elif current_price < ema20 or rsi < 48: current_state = "WEAKENING"
+            elif price_strength and momentum_strength and current_price > float(target1): current_state = "STRONG"
+            elif price_strength and momentum_strength: current_state = "HEALTHY"
+            else: current_state = "NEUTRAL"
 
             TRADE_STATE[symbol] = current_state
 
-            # =========================================
-            # ADAPTIVE TRAILING LOGIC
-            # =========================================
-            # STEP 2: Replace STRONG block
-            if current_state == "STRONG":
-                new_sl = round(max(float(stop_loss), current_price * 0.992), 2)
+            if current_state in ["STRONG", "WEAKENING"]:
+                multiplier = 0.992 if current_state == "STRONG" else 0.996
+                new_sl = round(max(float(stop_loss), current_price * multiplier), 2)
                 previous_sl = LAST_TRAILING_SL.get(symbol)
 
                 if new_sl > float(stop_loss) and new_sl != previous_sl:
                     update_stop_loss(symbol, new_sl)
                     LAST_TRAILING_SL[symbol] = new_sl
-                    logger.info(f"{symbol} trailing SL updated to {new_sl}")
-
-            # STEP 3: Replace WEAKENING block
-            elif current_state == "WEAKENING":
-                new_sl = round(max(float(stop_loss), current_price * 0.996), 2)
-                previous_sl = LAST_TRAILING_SL.get(symbol)
-
-                if new_sl > float(stop_loss) and new_sl != previous_sl:
-                    update_stop_loss(symbol, new_sl)
-                    LAST_TRAILING_SL[symbol] = new_sl
-                    logger.info(f"{symbol} defensive SL updated to {new_sl}")
-
-            # =========================================
-            # SMART ALERT ENGINE
-            # =========================================
-            if LAST_ALERT_STATE.get(symbol) != current_state:
-                if current_state == "STRONG":
-                    msg = f"🚀 STRONG TRADE\nStock: {symbol}\nCMP: ₹{round(current_price, 2)}\nStrong continuation."
-                elif current_state == "HEALTHY":
-                    msg = f"📈 HEALTHY TRADE\nStock: {symbol}\nCMP: ₹{round(current_price, 2)}\nTrend intact."
-                elif current_state == "WEAKENING":
-                    msg = f"⚠️ MOMENTUM WEAKENING\nStock: {symbol}\nCMP: ₹{round(current_price, 2)}\nMomentum deteriorating."
-                elif current_state == "DANGER":
-                    msg = f"🛑 DANGER ZONE\nStock: {symbol}\nCMP: ₹{round(current_price, 2)}\nPrice near stop-loss."
-                else:
-                    msg = f"⏳ TRADE NEUTRAL\nStock: {symbol}\nCMP: ₹{round(current_price, 2)}\nNo strong directional edge."
-
-                send_trade_update(symbol, msg)
-                LAST_ALERT_STATE[symbol] = current_state
 
         except Exception as e:
             logger.error(f"Trade monitor error for {symbol}: {e}")
@@ -233,6 +191,14 @@ def run_scanner():
 
         logger.info(f"Scanning batch: {batch}")
         for symbol in batch:
+            # STEP 5: Cooldown Check logic
+            cooldown_time = RECENTLY_CLOSED.get(symbol)
+            if cooldown_time:
+                minutes_passed = (datetime.utcnow() - cooldown_time).total_seconds() / 60
+                if minutes_passed < 60:
+                    logger.info(f"{symbol} in cooldown period")
+                    continue
+
             try:
                 if is_signal_active(symbol): continue
                 df = get_dhan_data(symbol)
@@ -241,7 +207,6 @@ def run_scanner():
                 if result:
                     save_signal(result)
                     send_alert(symbol=result['symbol'], action="BUY", entry=result['entry'], sl=result['sl'], target1=result['target1'], target2=result['target2'], confidence=result['score'], reason=result['reasons'], quantity=result.get('quantity'))
-                    logger.info(f"Signal generated: {symbol}")
             except Exception as e:
                 logger.error(f"Scanner error for {symbol}: {e}")
 
