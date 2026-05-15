@@ -2,14 +2,13 @@ import logging
 import pandas as pd
 from dhan_data import get_dhan_data
 from database import get_active_bought_trades, close_trade, update_trade_note, update_stop_loss
-from telegram_alert import send_trade_update
 
 logger = logging.getLogger(__name__)
 
 # --- GLOBAL STATES ---
 SCAN_LOCK = {"running": False}
-LAST_ALERT_STATE = {} 
-TRADE_STATE = {}  # Trade lifecycle intelligence store
+LAST_ALERT_STATE = {} # Spam control ke liye
+TRADE_STATE = {}      # Trade lifecycle intelligence ke liye
 
 def evaluate_open_positions():
     trades = get_active_bought_trades()
@@ -32,7 +31,7 @@ def evaluate_open_positions():
             # Technical Indicators
             ema20 = df['close'].ewm(span=20, adjust=False).mean().iloc[-1]
             
-            # RSI Logic
+            # RSI Calculation
             delta = df['close'].diff()
             gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
             loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
@@ -42,8 +41,9 @@ def evaluate_open_positions():
             volume_avg = df['volume'].rolling(window=10).mean().iloc[-1]
             latest_volume = df['volume'].iloc[-1]
 
-            # --- 1. HARD EXIT LOGIC (Targets & SL) ---
+            # 1. HARD EXIT LOGIC (Targets & SL)
             if current_price >= float(target2):
+                from telegram_alert import send_trade_update
                 send_trade_update(symbol, f"🚀 TARGET 2 HIT\nStock: {symbol}\nCMP: ₹{round(current_price, 2)}\nFull target achieved.")
                 close_trade(symbol, "TARGET2_HIT", current_price)
                 LAST_ALERT_STATE.pop(symbol, None)
@@ -51,58 +51,66 @@ def evaluate_open_positions():
                 continue
 
             if current_price >= float(target1):
+                from telegram_alert import send_trade_update
                 send_trade_update(symbol, f"🎯 TARGET 1 HIT\nStock: {symbol}\nCMP: ₹{round(current_price, 2)}\nBook 50% & Trail.")
                 update_trade_note(symbol, "Target 1 achieved")
 
             if current_price <= float(stop_loss):
+                from telegram_alert import send_trade_update
                 send_trade_update(symbol, f"❌ STOP LOSS HIT\nStock: {symbol}\nCMP: ₹{round(current_price, 2)}\nExit position.")
                 close_trade(symbol, "SL_HIT", current_price)
                 LAST_ALERT_STATE.pop(symbol, None)
                 TRADE_STATE.pop(symbol, None)
                 continue
 
-            # --- 2. INTELLIGENT STATE CLASSIFICATION ---
+            # 4. TRADE STATE ENGINE
             current_state = "NEUTRAL"
             price_strength = current_price > ema20
             volume_strength = latest_volume > volume_avg
             momentum_strength = rsi > 55
 
-            if price_strength and volume_strength and momentum_strength and current_price > float(target1):
+            # STRONG TRADE
+            if (price_strength and volume_strength and momentum_strength and current_price > float(target1)):
                 current_state = "STRONG"
-            elif price_strength and momentum_strength:
+
+            # HEALTHY TRADE
+            elif (price_strength and momentum_strength):
                 current_state = "HEALTHY"
-            elif current_price < ema20 or rsi < 48:
+
+            # WEAKENING TRADE
+            elif (current_price < ema20 or rsi < 48):
                 current_state = "WEAKENING"
-            elif current_price <= (float(stop_loss) * 1.01): # SL ke 1% pass
+
+            # DANGER ZONE
+            elif (current_price <= (float(stop_loss) * 1.01)):
                 current_state = "DANGER"
 
-            # Sync with Trade Intelligence engine
             TRADE_STATE[symbol] = current_state
 
-            # --- 3. SMART NOTIFICATION (Only on State Change) ---
+            # SMART ALERT CONTROL
             if LAST_ALERT_STATE.get(symbol) != current_state:
-                
-                status_emoji = {
-                    "STRONG": "🔥",
-                    "HEALTHY": "📈",
-                    "WEAKENING": "⚠️",
-                    "DANGER": "🚨",
-                    "NEUTRAL": "⏳"
-                }
-                
-                msg_map = {
-                    "STRONG": "Trend is explosive! Holding above Target 1.",
-                    "HEALTHY": "Trend strong, holding valid.",
-                    "WEAKENING": "Momentum fading. Price below EMA20 or RSI weak.",
-                    "DANGER": "Very close to Stop Loss! Watch carefully.",
-                    "NEUTRAL": "Momentum mixed, sideways movement."
-                }
+                from telegram_alert import send_trade_update
 
-                emoji = status_emoji.get(current_state, "🔔")
-                note = msg_map.get(current_state, "State updated.")
-                
-                msg = f"{emoji} TRADE {current_state}\nStock: {symbol}\nCMP: ₹{round(current_price, 2)}\n{note}"
-                
+                if current_state == "STRONG":
+                    msg = (f"🚀 STRONG TRADE\nStock: {symbol}\nCMP: ₹{round(current_price, 2)}\n"
+                           f"Trade showing strong continuation.\nPrice sustaining above EMA20.\n"
+                           f"Momentum and participation strong.\nHolding remains favorable.")
+
+                elif current_state == "HEALTHY":
+                    msg = (f"📈 HEALTHY TRADE\nStock: {symbol}\nCMP: ₹{round(current_price, 2)}\n"
+                           f"Trend structure remains intact.\nMomentum stable.\nNo major weakness detected.")
+
+                elif current_state == "WEAKENING":
+                    msg = (f"⚠️ MOMENTUM WEAKENING\nStock: {symbol}\nCMP: ₹{round(current_price, 2)}\n"
+                           f"Momentum deteriorating.\nPrice losing trend quality.\nWatch closely for breakdown risk.")
+
+                elif current_state == "DANGER":
+                    msg = (f"🛑 DANGER ZONE\nStock: {symbol}\nCMP: ₹{round(current_price, 2)}\n"
+                           f"Price approaching stop-loss region.\nBreakdown probability increasing.\nCapital protection priority now.")
+                else:
+                    msg = (f"⏳ TRADE NEUTRAL\nStock: {symbol}\nCMP: ₹{round(current_price, 2)}\n"
+                           f"Trade still active.\nNo strong directional edge currently.")
+
                 send_trade_update(symbol, msg)
                 LAST_ALERT_STATE[symbol] = current_state
 
@@ -112,7 +120,6 @@ def evaluate_open_positions():
 def run_scanner():
     if SCAN_LOCK["running"]:
         return
-
     SCAN_LOCK["running"] = True
     try:
         logger.info("PETS Scanner cycle started...")
