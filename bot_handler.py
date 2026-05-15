@@ -50,8 +50,8 @@ def handle_command(command):
         get_trade_performance_summary,
         execute_query
     )
-    # Import SYSTEM_STATS and LAST_SCAN_TIME
-    from scanner import run_scanner, LAST_SCAN_TIME, SYSTEM_STATS
+    # Import SYSTEM_STATS, LAST_SCAN_TIME and MARKET_BREADTH
+    from scanner import run_scanner, LAST_SCAN_TIME, SYSTEM_STATS, MARKET_BREADTH
 
     parts = command.split()
     if not parts: return
@@ -78,7 +78,7 @@ def handle_command(command):
         )
         send_message(msg)
 
-    # --- STEP 6: DIAGNOSTICS COMMAND ---
+    # --- UPDATED DIAGNOSTICS COMMAND ---
     elif base == "/diagnostics":
         last_signal = SYSTEM_STATS.get("last_signal_time")
         
@@ -92,7 +92,10 @@ def handle_command(command):
             f"Total Scans: `{SYSTEM_STATS['total_scans']}`\n"
             f"Signals Generated: `{SYSTEM_STATS['successful_signals']}`\n"
             f"Last Signal: `{signal_age}`\n"
-            f"Last Error: `{SYSTEM_STATS['last_error'] or 'None'}`"
+            f"Last Error: `{SYSTEM_STATS['last_error'] or 'None'}`\n\n"
+            f"📊 *Market Breadth:*\n"
+            f"Bullish Breadth: `{MARKET_BREADTH['bullish']}`\n"
+            f"Bearish Breadth: `{MARKET_BREADTH['bearish']}`"
         )
         send_message(msg)
 
