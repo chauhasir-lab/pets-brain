@@ -7,7 +7,7 @@ from strategy import (
     calculate_rsi,
     is_market_hours,
     get_nifty_trend,
-    SECTOR_MAP # STEP 2: Sector Map Import
+    SECTOR_MAP 
 )
 from telegram_alert import send_alert, send_trade_update
 from dhan_data import get_dhan_data
@@ -20,10 +20,16 @@ from database import (
     close_trade,
     update_trade_note,
     update_stop_loss,
-    save_trade_analytics
+    save_trade_analytics,
+    execute_query # Added for consistency with new DB wrapper
 )
 
 logger = logging.getLogger(__name__)
+
+# --- STEP 1: ADDED LAST_SCAN_TIME ---
+LAST_SCAN_TIME = {
+    "time": None
+}
 
 WATCHLIST = [
     "RELIANCE", "TCS", "HDFCBANK", "INFY", "ICICIBANK",
@@ -53,28 +59,25 @@ STATE_WEAKNESS_COUNT = {}
 LOSS_STREAK = {"count": 0}
 TRADE_PRIORITY = {}
 LIVE_CONFIDENCE = {}
-SECTOR_EXPOSURE = {} # STEP 1: Global Exposure Tracker
+SECTOR_EXPOSURE = {} 
 
 
 def save_signal(signal):
-    conn = get_connection()
-    if not conn: return
-    try:
-        cursor = conn.cursor()
-        cursor.execute("""
-            INSERT INTO signals (symbol, action, entry_price, stop_loss, target, confidence, reason)
-            VALUES (%s, %s, %s, %s, %s, %s, %s)
-        """, (signal['symbol'], "BUY", signal['entry'], signal['sl'], signal['target1'], signal['score'], signal['reasons']))
+    # Using execute_query for better stability
+    query_signal = """
+        INSERT INTO signals (symbol, action, entry_price, stop_loss, target, confidence, reason)
+        VALUES (%s, %s, %s, %s, %s, %s, %s)
+    """
+    execute_query(query_signal, (signal['symbol'], "BUY", signal['entry'], signal['sl'], 
+                                 signal['target1'], signal['score'], signal['reasons']), commit=True)
 
-        cursor.execute("""
-            INSERT INTO active_signals (symbol, setup_type, status, entry_price, stop_loss, target1, target2, score, rr, quantity)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-        """, (signal['symbol'], signal.get('regime', 'NORMAL'), 'NEW', signal['entry'], signal['sl'], signal['target1'], signal['target2'], signal['score'], signal['rr'], signal['quantity']))
-        conn.commit()
-        cursor.close()
-        conn.close()
-    except Exception as e:
-        logger.error(f"Save signal error: {e}")
+    query_active = """
+        INSERT INTO active_signals (symbol, setup_type, status, entry_price, stop_loss, target1, target2, score, rr, quantity)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+    """
+    execute_query(query_active, (signal['symbol'], signal.get('regime', 'NORMAL'), 'NEW', signal['entry'], 
+                                 signal['sl'], signal['target1'], signal['target2'], signal['score'], 
+                                 signal['rr'], signal['quantity']), commit=True)
 
 
 def evaluate_open_positions():
@@ -86,9 +89,7 @@ def evaluate_open_positions():
             (symbol, entry_price, stop_loss, target1, target2, 
              quantity, rr, score, signal_time, setup_type) = trade
             
-            # Classification & Live Engine
-            priority = "HIGH" if score >= 90 else "MEDIUM" if score >= 75 else "LOW"
-            TRADE_PRIORITY[symbol] = priority
+            TRADE_PRIORITY[symbol] = "HIGH" if score >= 90 else "MEDIUM" if score >= 75 else "LOW"
 
             df = get_dhan_data(symbol)
             if df is None or df.empty: continue
@@ -97,7 +98,6 @@ def evaluate_open_positions():
             ema20 = float(df['close'].ewm(span=20, adjust=False).mean().iloc[-1])
             rsi = calculate_rsi(df['close'])
             
-            # TRADE STATE & CONFIDENCE
             price_strength = (current_price > ema20)
             if current_price < ema20 or rsi < 48: current_state = "WEAKENING"
             elif price_strength and rsi > 55: current_state = "STRONG" if current_price > float(target1) else "HEALTHY"
@@ -106,13 +106,11 @@ def evaluate_open_positions():
             live_score = score + (10 if current_state == "STRONG" else -10 if current_state == "WEAKENING" else 0)
             LIVE_CONFIDENCE[symbol] = live_score
 
-            # EXIT LOGIC: Confidence Collapse
             if live_score < 50:
                 close_trade(symbol, "CONFIDENCE_EXIT", current_price)
                 for d in [TRADE_STATE, BREAKEVEN_DONE, LAST_TRAILING_SL, LIVE_CONFIDENCE, TRADE_PRIORITY]: d.pop(symbol, None)
                 continue
 
-            # TARGET/SL Logic
             if current_price >= float(target2):
                 close_trade(symbol, "TARGET2_HIT", current_price)
                 LOSS_STREAK["count"] = 0
@@ -125,7 +123,6 @@ def evaluate_open_positions():
                 for d in [TRADE_STATE, BREAKEVEN_DONE, LAST_TRAILING_SL, LIVE_CONFIDENCE, TRADE_PRIORITY]: d.pop(symbol, None)
                 continue
 
-            # ADAPTIVE TRAILING
             if current_price >= float(target1) and not BREAKEVEN_DONE.get(symbol):
                 update_stop_loss(symbol, round(float(entry_price), 2))
                 BREAKEVEN_DONE[symbol] = True
@@ -138,13 +135,13 @@ def run_scanner():
     if SCAN_LOCK["running"] or not is_market_hours(): return
     SCAN_LOCK["running"] = True
     try:
+        # --- STEP 2: UPDATE SCAN TIMESTAMP ---
+        LAST_SCAN_TIME["time"] = datetime.utcnow()
+
         market_trend = get_nifty_trend()
         if market_trend == "BULLISH": LOSS_STREAK["count"] = 0
         MARKET_PANIC["active"] = (market_trend == "BEARISH")
 
-        # =========================================
-        # STEP 3: SECTOR EXPOSURE RESET
-        # =========================================
         SECTOR_EXPOSURE.clear()
         active_trades = get_active_bought_trades()
         for trade in active_trades:
@@ -170,9 +167,6 @@ def run_scanner():
             return
 
         for symbol in batch:
-            # =========================================
-            # STEP 4: SECTOR EXPOSURE CHECK
-            # =========================================
             sector = SECTOR_MAP.get(symbol, "UNKNOWN")
             sector_count = SECTOR_EXPOSURE.get(sector, 0)
             
@@ -190,9 +184,10 @@ def run_scanner():
                     result = analyze_setup(df, symbol)
                     if result:
                         save_signal(result)
-                        # STEP 5: Update exposure on success
                         SECTOR_EXPOSURE[sector] = SECTOR_EXPOSURE.get(sector, 0) + 1
-                        send_alert(symbol=result['symbol'], action="BUY", entry=result['entry'], sl=result['sl'], target1=result['target1'], target2=result['target2'], confidence=result['score'], reason=result['reasons'], quantity=result.get('quantity'))
+                        send_alert(symbol=result['symbol'], action="BUY", entry=result['entry'], 
+                                   sl=result['sl'], target1=result['target1'], target2=result['target2'], 
+                                   confidence=result['score'], reason=result['reasons'], quantity=result.get('quantity'))
             except Exception as e:
                 logger.error(f"Scanner error for {symbol}: {e}")
 
