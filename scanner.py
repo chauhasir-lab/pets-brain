@@ -21,12 +21,19 @@ from database import (
     update_trade_note,
     update_stop_loss,
     save_trade_analytics,
-    execute_query # Added for consistency with new DB wrapper
+    execute_query 
 )
 
 logger = logging.getLogger(__name__)
 
-# --- STEP 1: ADDED LAST_SCAN_TIME ---
+# --- STEP 1: SYSTEM STATS ---
+SYSTEM_STATS = {
+    "last_signal_time": None,
+    "last_error": None,
+    "total_scans": 0,
+    "successful_signals": 0
+}
+
 LAST_SCAN_TIME = {
     "time": None
 }
@@ -63,7 +70,6 @@ SECTOR_EXPOSURE = {}
 
 
 def save_signal(signal):
-    # Using execute_query for better stability
     query_signal = """
         INSERT INTO signals (symbol, action, entry_price, stop_loss, target, confidence, reason)
         VALUES (%s, %s, %s, %s, %s, %s, %s)
@@ -129,14 +135,16 @@ def evaluate_open_positions():
 
         except Exception as e:
             logger.error(f"Trade monitor error for {symbol}: {e}")
+            SYSTEM_STATS["last_error"] = str(e)
 
 
 def run_scanner():
     if SCAN_LOCK["running"] or not is_market_hours(): return
     SCAN_LOCK["running"] = True
     try:
-        # --- STEP 2: UPDATE SCAN TIMESTAMP ---
         LAST_SCAN_TIME["time"] = datetime.utcnow()
+        # --- STEP 2: TOTAL SCANS ---
+        SYSTEM_STATS["total_scans"] += 1
 
         market_trend = get_nifty_trend()
         if market_trend == "BULLISH": LOSS_STREAK["count"] = 0
@@ -184,13 +192,21 @@ def run_scanner():
                     result = analyze_setup(df, symbol)
                     if result:
                         save_signal(result)
+                        # --- STEP 3: SUCCESS STATS ---
+                        SYSTEM_STATS["successful_signals"] += 1
+                        SYSTEM_STATS["last_signal_time"] = datetime.utcnow()
+                        
                         SECTOR_EXPOSURE[sector] = SECTOR_EXPOSURE.get(sector, 0) + 1
                         send_alert(symbol=result['symbol'], action="BUY", entry=result['entry'], 
                                    sl=result['sl'], target1=result['target1'], target2=result['target2'], 
                                    confidence=result['score'], reason=result['reasons'], quantity=result.get('quantity'))
             except Exception as e:
                 logger.error(f"Scanner error for {symbol}: {e}")
+                SYSTEM_STATS["last_error"] = str(e)
 
         BATCH_INDEX[0] = start + batch_size
+    except Exception as e:
+        logger.error(f"Global run_scanner error: {e}")
+        SYSTEM_STATS["last_error"] = str(e)
     finally:
         SCAN_LOCK["running"] = False
