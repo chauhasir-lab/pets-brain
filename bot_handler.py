@@ -20,9 +20,12 @@ def send_message(text):
 def handle_command(command):
     # Dynamic imports to avoid circular dependency
     from database import (
-        close_trade, update_trade_note, 
-        get_trade_performance_summary, execute_query,
-        get_recent_trade_failures  # Added from STEP 1
+        close_trade, 
+        update_trade_note, 
+        get_trade_performance_summary, 
+        execute_query,
+        get_recent_trade_failures,
+        mark_trade_as_bought
     )
     from scanner import (
         run_scanner, LAST_SCAN_TIME, SYSTEM_STATS, 
@@ -57,9 +60,18 @@ def handle_command(command):
         )
         send_message(msg)
 
-    # =========================================
-    # STEP 3: RECENT FAILURES COMMAND
-    # =========================================
+    elif base == "/buy":
+        if len(parts) < 2:
+            send_message("⚠️ *Usage:* `/buy SYMBOL` (e.g., `/buy RELIANCE`)")
+            return
+        
+        symbol = parts[1].upper()
+        try:
+            mark_trade_as_bought(symbol)
+            send_message(f"✅ *{symbol}* marked as BOUGHT in database.")
+        except Exception as e:
+            send_message(f"❌ *Error:* `{str(e)}`")
+
     elif base == "/failures":
         rows = get_recent_trade_failures()
         if not rows:
@@ -76,7 +88,6 @@ def handle_command(command):
                 f"Regime: `{regime}`\n"
                 f"State: `{state}`\n\n"
             )
-        # Message length handle karne ke liye (Telegram limit 4096)
         send_message(msg[:4000])
 
     elif base == "/performance":
@@ -99,7 +110,7 @@ def handle_command(command):
         send_message("✅ *Scan complete.*")
 
     elif base == "/help":
-        send_message("`/health`, `/diagnostics`, `/status`, `/scan`, `/performance`, `/failures`, `/signals`")
+        send_message("`/health`, `/diagnostics`, `/status`, `/scan`, `/performance`, `/failures`, `/buy SYMBOL`, `/signals`")
 
 def start_bot_listener():
     logger.info("Bot Listener Started.")
