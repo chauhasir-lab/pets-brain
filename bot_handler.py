@@ -21,7 +21,8 @@ def handle_command(command):
     # Dynamic imports to avoid circular dependency
     from database import (
         close_trade, update_trade_note, 
-        get_trade_performance_summary, execute_query
+        get_trade_performance_summary, execute_query,
+        get_recent_trade_failures  # Added from STEP 1
     )
     from scanner import (
         run_scanner, LAST_SCAN_TIME, SYSTEM_STATS, 
@@ -37,9 +38,6 @@ def handle_command(command):
         status = "ACTIVE" if last_scan and (datetime.utcnow() - last_scan).total_seconds() < 600 else "STALE"
         send_message(f"🧠 *PETS HEALTH*\nStatus: `{status}`\nLast Scan: `{last_scan}`")
 
-    # =========================================
-    # STEP 5: IMPROVED DIAGNOSTICS
-    # =========================================
     elif base == "/diagnostics":
         last_signal = SYSTEM_STATS.get("last_signal_time")
         signal_age = f"{round((datetime.utcnow() - last_signal).total_seconds()/60, 1)}m ago" if last_signal else "None"
@@ -59,6 +57,39 @@ def handle_command(command):
         )
         send_message(msg)
 
+    # =========================================
+    # STEP 3: RECENT FAILURES COMMAND
+    # =========================================
+    elif base == "/failures":
+        rows = get_recent_trade_failures()
+        if not rows:
+            send_message("❌ *No recent failures found.*")
+            return
+
+        msg = "📉 *RECENT TRADE FAILURES*\n\n"
+        for row in rows:
+            (symbol, result, rr, score, regime, state, created_at) = row
+            msg += (
+                f"▪️ *{symbol}*\n"
+                f"Exit: `{result}`\n"
+                f"RR: `{rr}` | Score: `{score}`\n"
+                f"Regime: `{regime}`\n"
+                f"State: `{state}`\n\n"
+            )
+        # Message length handle karne ke liye (Telegram limit 4096)
+        send_message(msg[:4000])
+
+    elif base == "/performance":
+        perf = get_trade_performance_summary()
+        msg = (
+            f"📊 *WEEKLY PERFORMANCE*\n\n"
+            f"Total Trades: `{perf['total']}`\n"
+            f"Wins: `{perf['wins']}` ✅\n"
+            f"Losses: `{perf['losses']}` ❌\n"
+            f"Win Rate: `{perf['win_rate']}%`"
+        )
+        send_message(msg)
+
     elif base == "/status":
         send_message("✅ *PETS Engine Active*")
 
@@ -68,7 +99,7 @@ def handle_command(command):
         send_message("✅ *Scan complete.*")
 
     elif base == "/help":
-        send_message("`/health`, `/diagnostics`, `/status`, `/scan`, `/performance`, `/signals`")
+        send_message("`/health`, `/diagnostics`, `/status`, `/scan`, `/performance`, `/failures`, `/signals`")
 
 def start_bot_listener():
     logger.info("Bot Listener Started.")
@@ -84,5 +115,6 @@ def start_bot_listener():
                     if str(msg.get("chat", {}).get("id")) == str(TELEGRAM_CHAT_ID):
                         handle_command(msg.get("text", ""))
             time.sleep(1)
-        except:
+        except Exception as e:
+            logger.error(f"Listener Error: {e}")
             time.sleep(5)
