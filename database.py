@@ -50,7 +50,8 @@ def execute_query(query, params=None, fetchone=False, fetchall=False, commit=Fal
         logger.error(f"Database query error: {e}")
         return None
     finally:
-        conn.close()
+        if conn:
+            conn.close()
 
 def create_tables():
     queries = [
@@ -141,6 +142,22 @@ def get_trade_performance_summary():
         "win_rate": round((wins / total) * 100, 2)
     }
 
+def get_regime_performance():
+    query = """
+        SELECT
+            market_regime,
+            COUNT(*) as total,
+            COUNT(*) FILTER (
+                WHERE result IN (
+                    'TARGET1_HIT',
+                    'TARGET2_HIT'
+                )
+            ) as wins
+        FROM trade_analytics
+        GROUP BY market_regime
+    """
+    return execute_query(query, fetchall=True)
+
 def get_recent_trade_failures(limit=10):
     query = """
         SELECT 
@@ -180,8 +197,7 @@ def close_trade(symbol, result, exit_price=None):
         return
 
     (entry_price, stop_loss, target1, target2, quantity, rr, score, signal_time, setup_type) = trade
-    pnl = round((float(exit_price or 0) - float(entry_price)) * int(quantity), 2) if exit_price else 0
-
+    
     save_trade_analytics(
         symbol=symbol,
         result=result,
