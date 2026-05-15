@@ -119,6 +119,26 @@ def get_active_bought_trades():
     """
     return execute_query(query, fetchall=True) or []
 
+def get_active_trade_summary():
+    query = """
+        SELECT
+            symbol,
+            entry_price,
+            stop_loss,
+            target1,
+            target2,
+            quantity,
+            rr,
+            score,
+            signal_time,
+            setup_type,
+            status
+        FROM active_signals
+        WHERE status = 'BOUGHT'
+        ORDER BY signal_time DESC
+    """
+    return execute_query(query, fetchall=True)
+
 def update_stop_loss(symbol, new_sl):
     query = """
         UPDATE active_signals SET stop_loss = %s, last_updated = NOW()
