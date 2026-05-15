@@ -1,7 +1,7 @@
 import logging
 import os
 import requests
-import time  # <--- Polling delay ke liye zaroori hai
+import time
 
 logger = logging.getLogger(__name__)
 
@@ -30,7 +30,7 @@ def send_message(text):
 
 def get_updates(offset=None):
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/getUpdates"
-    params = {"timeout": 20} # Long polling better hoti hai
+    params = {"timeout": 20} 
     if offset:
         params["offset"] = offset
     try:
@@ -45,7 +45,8 @@ def handle_command(command):
     from database import (
         get_connection,
         close_trade,
-        update_trade_note
+        update_trade_note,
+        get_trade_performance_summary  # New Import
     )
     from scanner import run_scanner
 
@@ -70,6 +71,22 @@ def handle_command(command):
             send_message("✅ *Scan complete.*")
         except Exception as e:
             send_message(f"❌ Scan failed: {e}")
+
+    elif base == "/performance": # --- NEW COMMAND ---
+        data = get_trade_performance_summary()
+        if not data or data['total'] == 0:
+            send_message("📊 *No analytics data available for the last 7 days.*")
+            return
+        
+        msg = (
+            f"📊 *PETS PERFORMANCE REPORT*\n"
+            f"_(Last 7 Days)_\n\n"
+            f"Total Trades: `{data['total']}`\n"
+            f"Wins: ✅ `{data['wins']}`\n"
+            f"Losses: ❌ `{data['losses']}`\n"
+            f"Win Rate: *{data['win_rate']}%*"
+        )
+        send_message(msg)
 
     elif base == "/signals":
         conn = get_connection()
@@ -129,7 +146,6 @@ def handle_command(command):
             send_message("Usage: `/sold SYMBOL`")
             return
         symbol = parts[1].upper()
-        # close_trade logic handle karega analytics aur status update
         close_trade(symbol, "MANUAL_EXIT")
         send_message(f"✅ Trade closed manually: *{symbol}*")
 
@@ -147,6 +163,7 @@ def handle_command(command):
             "📘 *PETS COMMANDS*\n\n"
             "`/status` - Check Engine\n"
             "`/scan` - Trigger Scanner\n"
+            "`/performance` - Win/Loss Stats\n"
             "`/signals` - Recent Calls\n"
             "`/bought SYMBOL` - Mark Entry\n"
             "`/sold SYMBOL` - Mark Exit\n"
@@ -159,7 +176,6 @@ def start_bot_listener():
     logger.info("Telegram Bot Listener Started.")
     offset = None
     
-    # Pre-start check
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
         logger.error("Telegram credentials missing in ENV!")
         return
@@ -172,16 +188,14 @@ def start_bot_listener():
                     offset = update["update_id"] + 1
                     message = update.get("message", {})
                     text = message.get("text", "")
-                    # Sirf authorized chat_id se command accept karega
                     user_chat_id = str(message.get("chat", {}).get("id", ""))
                     
                     if user_chat_id == str(TELEGRAM_CHAT_ID) and text.startswith("/"):
                         logger.info(f"Command received: {text}")
                         handle_command(text.strip())
             
-            # API rate limiting se bachne ke liye chhota pause
             time.sleep(1)
             
         except Exception as e:
             logger.error(f"Bot listener loop error: {e}")
-            time.sleep(5) # Error aane par 5 second wait karein
+            time.sleep(5)
