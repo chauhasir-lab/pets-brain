@@ -49,7 +49,9 @@ LAST_TRAILING_SL = {}
 RECENTLY_CLOSED = {}
 MARKET_PANIC = {"active": False}
 STATE_WEAKNESS_COUNT = {}
-LOSS_STREAK = {"count": 0} # STEP 1: Streak Tracker
+LOSS_STREAK = {"count": 0}
+TRADE_PRIORITY = {}
+LIVE_CONFIDENCE = {} # STEP 1: Live score tracking
 
 
 def save_signal(signal):
@@ -81,6 +83,13 @@ def evaluate_open_positions():
         try:
             (symbol, entry_price, stop_loss, target1, target2, 
              quantity, rr, score, signal_time, setup_type) = trade
+            
+            # TRADE PRIORITY CLASSIFICATION
+            if score >= 90: priority = "HIGH"
+            elif score >= 75: priority = "MEDIUM"
+            else: priority = "LOW"
+            TRADE_PRIORITY[symbol] = priority
+
             trade_age_hours = (datetime.utcnow() - signal_time).total_seconds() / 3600
 
             df = get_dhan_data(symbol)
@@ -88,75 +97,91 @@ def evaluate_open_positions():
 
             current_price = float(df['close'].iloc[-1])
             ema20 = float(df['close'].ewm(span=20, adjust=False).mean().iloc[-1])
-            
             volume_avg = float(df['volume'].rolling(window=10).mean().iloc[-1])
             latest_volume = float(df['volume'].iloc[-1])
-            previous_close = float(df['close'].iloc[-2])
-            price_drop_pct = ((previous_close - current_price) / previous_close) * 100
-            volume_spike = (latest_volume > (volume_avg * 2))
-
-            # Indicator logic for RSI
+            
+            # Indicator logic
             delta = df['close'].diff()
             gain = (delta.where(delta > 0, 0).rolling(window=14).mean())
             loss = ((-delta.where(delta < 0, 0)).rolling(window=14).mean())
             rsi = float((100 - (100 / (1 + (gain / (loss + 1e-10))))).iloc[-1])
 
+            # TRADE STATE Engine
+            price_strength = (current_price > ema20)
+            if current_price <= (float(stop_loss) * 1.01): current_state = "DANGER"
+            elif current_price < ema20 or rsi < 48: current_state = "WEAKENING"
+            elif price_strength and rsi > 55 and current_price > float(target1): current_state = "STRONG"
+            elif price_strength and rsi > 55: current_state = "HEALTHY"
+            else: current_state = "NEUTRAL"
+            TRADE_STATE[symbol] = current_state
+
+            # STEP 2: LIVE CONFIDENCE ENGINE
+            live_score = score
+            if current_price > ema20: live_score += 5
+            if rsi > 60: live_score += 5
+            if latest_volume > volume_avg: live_score += 5
+            
+            if current_state == "STRONG": live_score += 10
+            elif current_state == "WEAKENING": live_score -= 10
+            elif current_state == "DANGER": live_score -= 20
+            
+            LIVE_CONFIDENCE[symbol] = live_score
+
+            # STEP 3: CONFIDENCE COLLAPSE EXIT
+            if live_score < 50:
+                send_trade_update(symbol, (f"📉 CONFIDENCE COLLAPSE EXIT\nStock: {symbol}\nCMP: ₹{round(current_price, 2)}\nConfidence severely degraded. Edge lost."))
+                save_trade_analytics(symbol=symbol, result="CONFIDENCE_EXIT", entry_price=entry_price, exit_price=current_price, stop_loss=stop_loss, target1=target1, target2=target2, rr=rr, score=live_score, regime=setup_type, state="CONFIDENCE_EXIT")
+                close_trade(symbol, "CONFIDENCE_EXIT", current_price)
+                LOSS_STREAK["count"] += 1
+                for d in [LAST_ALERT_STATE, TRADE_STATE, BREAKEVEN_DONE, LAST_TRAILING_SL, STATE_WEAKNESS_COUNT, TRADE_PRIORITY, LIVE_CONFIDENCE]: d.pop(symbol, None)
+                RECENTLY_CLOSED[symbol] = datetime.utcnow()
+                continue
+
             # =========================================
-            # TARGET 2 HIT (SUCCESS)
+            # TARGET / SL HIT Logic
             # =========================================
             if current_price >= float(target2):
                 save_trade_analytics(symbol=symbol, result="TARGET2_HIT", entry_price=entry_price, exit_price=current_price, stop_loss=stop_loss, target1=target1, target2=target2, rr=rr, score=score, regime=setup_type, state=TRADE_STATE.get(symbol))
                 close_trade(symbol, "TARGET2_HIT", current_price)
-                LOSS_STREAK["count"] = 0 # STEP 3: Reset streak on win
-                for d in [LAST_ALERT_STATE, TRADE_STATE, BREAKEVEN_DONE, LAST_TRAILING_SL, STATE_WEAKNESS_COUNT]: d.pop(symbol, None)
+                LOSS_STREAK["count"] = 0
+                for d in [LAST_ALERT_STATE, TRADE_STATE, BREAKEVEN_DONE, LAST_TRAILING_SL, STATE_WEAKNESS_COUNT, TRADE_PRIORITY, LIVE_CONFIDENCE]: d.pop(symbol, None)
                 RECENTLY_CLOSED[symbol] = datetime.utcnow()
                 continue
 
-            # =========================================
-            # STOP LOSS HIT (LOSS)
-            # =========================================
             if current_price <= float(stop_loss):
                 save_trade_analytics(symbol=symbol, result="SL_HIT", entry_price=entry_price, exit_price=current_price, stop_loss=stop_loss, target1=target1, target2=target2, rr=rr, score=score, regime=setup_type, state=TRADE_STATE.get(symbol))
                 close_trade(symbol, "SL_HIT", current_price)
-                LOSS_STREAK["count"] += 1 # STEP 2: Increase streak
-                logger.warning(f"Loss streak increased to {LOSS_STREAK['count']}")
-                for d in [LAST_ALERT_STATE, TRADE_STATE, BREAKEVEN_DONE, LAST_TRAILING_SL, STATE_WEAKNESS_COUNT]: d.pop(symbol, None)
+                LOSS_STREAK["count"] += 1
+                for d in [LAST_ALERT_STATE, TRADE_STATE, BREAKEVEN_DONE, LAST_TRAILING_SL, STATE_WEAKNESS_COUNT, TRADE_PRIORITY, LIVE_CONFIDENCE]: d.pop(symbol, None)
                 RECENTLY_CLOSED[symbol] = datetime.utcnow()
                 continue
 
             # =========================================
-            # DEFENSIVE EXITS (COUNT AS STREAK INCREMENT)
+            # QUALITY DECAY Logic
             # =========================================
-            sos_exit = (price_drop_pct > 2 and volume_spike)
-            dead_exit = (trade_age_hours > 24 and current_price < float(entry_price) * 1.005)
-            panic_exit = (MARKET_PANIC["active"] and current_price < ema20)
-            
-            # TRADE STATE & DECAY logic
-            price_strength = (current_price > ema20)
-            current_state = "STRONG" if (price_strength and rsi > 55 and current_price > float(target1)) else "WEAKENING" if (current_price < ema20 or rsi < 48) else "HEALTHY"
-            TRADE_STATE[symbol] = current_state
-            
-            if current_state == "WEAKENING":
-                STATE_WEAKNESS_COUNT[symbol] = STATE_WEAKNESS_COUNT.get(symbol, 0) + 1
-            else:
-                STATE_WEAKNESS_COUNT[symbol] = 0
-            
-            quality_decay_exit = (STATE_WEAKNESS_COUNT.get(symbol, 0) >= 3)
+            if current_state == "WEAKENING": STATE_WEAKNESS_COUNT[symbol] = STATE_WEAKNESS_COUNT.get(symbol, 0) + 1
+            else: STATE_WEAKNESS_COUNT[symbol] = 0
 
-            if sos_exit or dead_exit or panic_exit or quality_decay_exit:
-                result_str = "SOS_EXIT" if sos_exit else "DEAD_EXIT" if dead_exit else "MARKET_PANIC_EXIT" if panic_exit else "QUALITY_DECAY_EXIT"
-                send_trade_update(symbol, f"🛡 Defensive Exit: {result_str}\nStock: {symbol}\nCMP: ₹{round(current_price, 2)}")
-                save_trade_analytics(symbol=symbol, result=result_str, entry_price=entry_price, exit_price=current_price, stop_loss=stop_loss, target1=target1, target2=target2, rr=rr, score=score, regime=setup_type, state=result_str)
-                close_trade(symbol, result_str, current_price)
-                
-                LOSS_STREAK["count"] += 1 # STEP 4: Defensive exits count towards streak
-                for d in [LAST_ALERT_STATE, TRADE_STATE, BREAKEVEN_DONE, LAST_TRAILING_SL, STATE_WEAKNESS_COUNT]: d.pop(symbol, None)
+            decay_threshold = 5 if priority == "HIGH" else 3
+            if STATE_WEAKNESS_COUNT.get(symbol, 0) >= decay_threshold:
+                send_trade_update(symbol, f"📉 QUALITY DECAY EXIT\nStock: {symbol}\nCMP: ₹{round(current_price, 2)}")
+                save_trade_analytics(symbol=symbol, result="QUALITY_DECAY_EXIT", entry_price=entry_price, exit_price=current_price, stop_loss=stop_loss, target1=target1, target2=target2, rr=rr, score=score, regime=setup_type, state="QUALITY_DECAY")
+                close_trade(symbol, "QUALITY_DECAY_EXIT", current_price)
+                LOSS_STREAK["count"] += 1
+                for d in [LAST_ALERT_STATE, TRADE_STATE, BREAKEVEN_DONE, LAST_TRAILING_SL, STATE_WEAKNESS_COUNT, TRADE_PRIORITY, LIVE_CONFIDENCE]: d.pop(symbol, None)
                 RECENTLY_CLOSED[symbol] = datetime.utcnow()
                 continue
 
             # =========================================
-            # TRAILING SL
+            # ADAPTIVE TRAILING & BREAKEVEN
             # =========================================
+            if (current_state == "STRONG" and priority == "HIGH"):
+                new_sl = round(max(float(stop_loss), current_price * 0.992), 2)
+                if new_sl > float(stop_loss): update_stop_loss(symbol, new_sl)
+            elif (current_state == "WEAKENING" and priority != "HIGH"):
+                new_sl = round(max(float(stop_loss), current_price * 0.996), 2)
+                if new_sl > float(stop_loss): update_stop_loss(symbol, new_sl)
+
             if current_price >= float(target1) and not BREAKEVEN_DONE.get(symbol):
                 update_stop_loss(symbol, round(float(entry_price), 2))
                 BREAKEVEN_DONE[symbol] = True
@@ -169,26 +194,19 @@ def run_scanner():
     if SCAN_LOCK["running"] or not is_market_hours(): return
     SCAN_LOCK["running"] = True
     try:
-        # STEP 6: Conditional Streak Reset
         market_trend = get_nifty_trend()
-        if market_trend == "BULLISH":
-            if LOSS_STREAK["count"] > 0:
-                logger.info("Market turned Bullish. Resetting Loss Streak.")
-                LOSS_STREAK["count"] = 0
-        
+        if market_trend == "BULLISH": LOSS_STREAK["count"] = 0
         MARKET_PANIC["active"] = (market_trend == "BEARISH")
 
-        # STEP 5: Loss Streak Defense
         if LOSS_STREAK["count"] >= 3:
-            logger.warning("LOSS STREAK DEFENSE ACTIVE - Pausing Scanning")
-            evaluate_open_positions() # Still manage existing trades
+            logger.warning("LOSS STREAK DEFENSE ACTIVE")
+            evaluate_open_positions()
             return
 
         expire_old_signals()
         evaluate_open_positions()
 
-        if not KILL_SWITCH["active"] or len(get_active_bought_trades()) >= MAX_ACTIVE_TRADES:
-            return
+        if len(get_active_bought_trades()) >= MAX_ACTIVE_TRADES: return
 
         batch_size = 10
         start = BATCH_INDEX[0]
@@ -199,10 +217,8 @@ def run_scanner():
             return
 
         for symbol in batch:
-            cooldown_time = RECENTLY_CLOSED.get(symbol)
-            if cooldown_time and (datetime.utcnow() - cooldown_time).total_seconds() / 60 < 60:
+            if RECENTLY_CLOSED.get(symbol) and (datetime.utcnow() - RECENTLY_CLOSED[symbol]).total_seconds() / 60 < 60:
                 continue
-
             try:
                 if is_signal_active(symbol): continue
                 df = get_dhan_data(symbol)
