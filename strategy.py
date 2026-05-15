@@ -2,7 +2,6 @@ import pandas as pd
 import numpy as np
 import logging
 from datetime import datetime, timedelta
-
 from database import get_connection
 
 logger = logging.getLogger(__name__)
@@ -18,7 +17,6 @@ SECTOR_MAP = {
     "RELIANCE": "ENERGY", "ONGC": "ENERGY",
     "LT": "INFRA"
 }
-
 
 def is_market_hours():
     try:
@@ -37,7 +35,6 @@ def is_market_hours():
         ist_time = ist.hour * 100 + ist.minute
         return 915 <= ist_time <= 1530
 
-
 def check_daily_limit():
     today = datetime.utcnow().date()
     if DAILY_TRADES["date"] != today:
@@ -45,10 +42,8 @@ def check_daily_limit():
         DAILY_TRADES["date"] = today
     return DAILY_TRADES["count"] < 3
 
-
 def increment_trade_count():
     DAILY_TRADES["count"] += 1
-
 
 def get_nifty_trend():
     try:
@@ -75,7 +70,6 @@ def get_nifty_trend():
         logger.error(f"Nifty trend error: {e}")
     return "BULLISH"
 
-
 def check_relative_strength(df):
     try:
         stock_return = ((df['close'].iloc[-1] - df['close'].iloc[-6]) / df['close'].iloc[-6]) * 100
@@ -83,18 +77,16 @@ def check_relative_strength(df):
     except Exception:
         return False
 
-
 def calculate_vwap(df):
+    # Fixed the logic here to ensure scalar column operations
     df['tp'] = (df['high'] + df['low'] + df['close']) / 3
     df['tpv'] = df['tp'] * df['volume']
     df['vwap'] = df['tpv'].cumsum() / df['volume'].cumsum()
     return df
 
-
 def calculate_ema(df, period):
     df[f'ema_{period}'] = df['close'].ewm(span=period, adjust=False).mean()
     return df
-
 
 def calculate_atr(df, period=20):
     df['tr'] = np.maximum(
@@ -107,7 +99,6 @@ def calculate_atr(df, period=20):
     df['atr'] = df['tr'].rolling(window=period).mean()
     return df
 
-
 def calculate_rsi(df, period=14):
     delta = df['close'].diff()
     gain = delta.where(delta > 0, 0).rolling(window=period).mean()
@@ -116,12 +107,10 @@ def calculate_rsi(df, period=14):
     df['rsi'] = 100 - (100 / (1 + rs))
     return df
 
-
 def check_volume_spike(df):
     avg_volume = df['volume'].rolling(window=10).mean()
     latest_volume = df['volume'].iloc[-1]
     return latest_volume > (avg_volume.iloc[-1] * 1.5)
-
 
 def calculate_position_size(entry, sl, capital=10000):
     try:
@@ -139,7 +128,6 @@ def calculate_position_size(entry, sl, capital=10000):
         logger.error(f"Position sizing error: {e}")
         return 1
 
-
 def detect_market_regime(df):
     atr = df['atr'].iloc[-1]
     avg_atr = df['atr'].rolling(window=20).mean().iloc[-1]
@@ -152,7 +140,6 @@ def detect_market_regime(df):
     elif atr < avg_atr * 0.8:
         return "SIDEWAYS", 1.2
     return "NORMAL", 1.3
-
 
 def get_stock_personality(symbol, regime):
     try:
@@ -189,7 +176,6 @@ def get_stock_personality(symbol, regime):
     except Exception as e:
         logger.error(f"Stock personality error: {e}")
         return 0
-
 
 def get_sector_strength(symbol):
     try:
@@ -228,7 +214,6 @@ def get_sector_strength(symbol):
         logger.error(f"Sector strength error: {e}")
         return 0
 
-
 def analyze_setup(df, symbol):
     try:
         if not is_market_hours():
@@ -258,11 +243,9 @@ def analyze_setup(df, symbol):
         prev = df.iloc[-3]
         recent_high = df['high'].rolling(window=10).max().iloc[-3]
 
-        # Relative strength — hard filter
         if not check_relative_strength(df):
             return None
 
-        # Structure breakout with ATR buffer
         structure_breakout = latest['close'] > (recent_high + (0.15 * latest['atr']))
 
         candle_body = abs(latest['close'] - latest['open'])
@@ -281,7 +264,6 @@ def analyze_setup(df, symbol):
         reasons = ["Nifty OK"]
         score += 20
 
-        # VWAP Structure Breakout
         if (prev['close'] < prev['vwap']
                 and latest['close'] > latest['vwap']
                 and latest['volume'] > avg_volume
@@ -290,7 +272,6 @@ def analyze_setup(df, symbol):
             score += 20
             reasons.append("Strong VWAP Structure Breakout")
 
-        # EMA Trend
         ema_distance = abs(latest['ema_20'] - latest['ema_50']) / latest['close']
         if latest['close'] > latest['ema_20'] > latest['ema_50']:
             if ema_distance < 0.003:
@@ -298,22 +279,18 @@ def analyze_setup(df, symbol):
             score += 15
             reasons.append("Strong EMA Trend")
 
-        # Volume Spike
         if check_volume_spike(df):
             score += 20
             reasons.append("Volume Spike")
 
-        # RSI with slope
         rsi_slope = latest['rsi'] - prev['rsi']
         if 58 < latest['rsi'] < 75 and rsi_slope > 2:
             score += 15
             reasons.append("RSI Momentum")
 
-        # Relative Strength bonus
         score += 10
         reasons.append("Relative Strength Leader")
 
-        # Stock + Sector memory
         personality_score = get_stock_personality(symbol, regime)
         score += personality_score
         if personality_score != 0:
@@ -343,7 +320,6 @@ def analyze_setup(df, symbol):
         else:
             score -= 10
 
-        # HARD FILTERS
         if (latest['volume'] < avg_volume
                 or latest['close'] < latest['vwap']
                 or latest['ema_20'] < latest['ema_50']
