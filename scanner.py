@@ -2,7 +2,7 @@ import time
 import logging
 from datetime import datetime
 from strategy import analyze_setup
-from database import save_signal, execute_query
+from database import execute_query
 
 logger = logging.getLogger(__name__)
 
@@ -57,7 +57,6 @@ def run_scanner():
                 # =========================================
                 # STEP 2: SUCCESS SIGNAL REWARD (+10)
                 # =========================================
-                save_signal(result)
                 WATCHLIST_SCORES[symbol] = WATCHLIST_SCORES.get(symbol, 0) + 10
                 
                 SYSTEM_STATS["successful_signals"] += 1
