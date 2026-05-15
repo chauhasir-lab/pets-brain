@@ -1,8 +1,13 @@
 import pandas as pd
 import logging
-from datetime import datetime, timedelta # STEP 2: Updated import
+from datetime import datetime, timedelta
 
-from strategy import analyze_setup, calculate_rsi, is_market_hours
+from strategy import (
+    analyze_setup,
+    calculate_rsi,
+    is_market_hours,
+    get_nifty_trend
+)
 from telegram_alert import send_alert, send_trade_update
 from dhan_data import get_dhan_data
 
@@ -41,7 +46,10 @@ LAST_ALERT_STATE = {}
 TRADE_STATE = {}
 BREAKEVEN_DONE = {}
 LAST_TRAILING_SL = {}
-RECENTLY_CLOSED = {} # STEP 1: Cooldown memory tracker
+RECENTLY_CLOSED = {}
+MARKET_PANIC = {"active": False}
+STATE_WEAKNESS_COUNT = {}
+LOSS_STREAK = {"count": 0} # STEP 1: Streak Tracker
 
 
 def save_signal(signal):
@@ -69,102 +77,89 @@ def evaluate_open_positions():
     trades = get_active_bought_trades()
     if not trades: return
 
-    logger.info(f"Monitoring {len(trades)} trades")
-
     for trade in trades:
         try:
             (symbol, entry_price, stop_loss, target1, target2, 
              quantity, rr, score, signal_time, setup_type) = trade
+            trade_age_hours = (datetime.utcnow() - signal_time).total_seconds() / 3600
 
             df = get_dhan_data(symbol)
             if df is None or df.empty: continue
 
             current_price = float(df['close'].iloc[-1])
             ema20 = float(df['close'].ewm(span=20, adjust=False).mean().iloc[-1])
+            
+            volume_avg = float(df['volume'].rolling(window=10).mean().iloc[-1])
+            latest_volume = float(df['volume'].iloc[-1])
+            previous_close = float(df['close'].iloc[-2])
+            price_drop_pct = ((previous_close - current_price) / previous_close) * 100
+            volume_spike = (latest_volume > (volume_avg * 2))
 
-            # Indicator Logic
+            # Indicator logic for RSI
             delta = df['close'].diff()
             gain = (delta.where(delta > 0, 0).rolling(window=14).mean())
             loss = ((-delta.where(delta < 0, 0)).rolling(window=14).mean())
-            rs = gain / (loss + 1e-10)
-            rsi = float((100 - (100 / (1 + rs))).iloc[-1])
+            rsi = float((100 - (100 / (1 + (gain / (loss + 1e-10))))).iloc[-1])
 
             # =========================================
-            # EXIT LOGIC - TARGET 2
+            # TARGET 2 HIT (SUCCESS)
             # =========================================
             if current_price >= float(target2):
-                send_trade_update(symbol, f"🚀 TARGET 2 HIT\nStock: {symbol}\nCMP: ₹{round(current_price, 2)}")
-                
-                save_trade_analytics(
-                    symbol=symbol, result="TARGET2_HIT", entry_price=entry_price, exit_price=current_price,
-                    stop_loss=stop_loss, target1=target1, target2=target2, rr=rr, score=score,
-                    regime=setup_type, state=TRADE_STATE.get(symbol)
-                )
-
+                save_trade_analytics(symbol=symbol, result="TARGET2_HIT", entry_price=entry_price, exit_price=current_price, stop_loss=stop_loss, target1=target1, target2=target2, rr=rr, score=score, regime=setup_type, state=TRADE_STATE.get(symbol))
                 close_trade(symbol, "TARGET2_HIT", current_price)
-                
-                # Cleanup and Cooldown
-                LAST_ALERT_STATE.pop(symbol, None)
-                TRADE_STATE.pop(symbol, None)
-                BREAKEVEN_DONE.pop(symbol, None)
-                LAST_TRAILING_SL.pop(symbol, None)
-                
-                RECENTLY_CLOSED[symbol] = datetime.utcnow() # STEP 3: Add to cooldown
+                LOSS_STREAK["count"] = 0 # STEP 3: Reset streak on win
+                for d in [LAST_ALERT_STATE, TRADE_STATE, BREAKEVEN_DONE, LAST_TRAILING_SL, STATE_WEAKNESS_COUNT]: d.pop(symbol, None)
+                RECENTLY_CLOSED[symbol] = datetime.utcnow()
                 continue
 
             # =========================================
-            # TARGET 1 → BREAKEVEN
-            # =========================================
-            if current_price >= float(target1) and not BREAKEVEN_DONE.get(symbol):
-                new_sl = round(float(entry_price), 2)
-                update_stop_loss(symbol, new_sl)
-                BREAKEVEN_DONE[symbol] = True
-
-            # =========================================
-            # STOP LOSS
+            # STOP LOSS HIT (LOSS)
             # =========================================
             if current_price <= float(stop_loss):
-                send_trade_update(symbol, f"❌ STOP LOSS HIT\nStock: {symbol}\nCMP: ₹{round(current_price, 2)}")
-
-                save_trade_analytics(
-                    symbol=symbol, result="SL_HIT", entry_price=entry_price, exit_price=current_price,
-                    stop_loss=stop_loss, target1=target1, target2=target2, rr=rr, score=score,
-                    regime=setup_type, state=TRADE_STATE.get(symbol)
-                )
-
+                save_trade_analytics(symbol=symbol, result="SL_HIT", entry_price=entry_price, exit_price=current_price, stop_loss=stop_loss, target1=target1, target2=target2, rr=rr, score=score, regime=setup_type, state=TRADE_STATE.get(symbol))
                 close_trade(symbol, "SL_HIT", current_price)
-                
-                # Cleanup and Cooldown
-                LAST_ALERT_STATE.pop(symbol, None)
-                TRADE_STATE.pop(symbol, None)
-                BREAKEVEN_DONE.pop(symbol, None)
-                LAST_TRAILING_SL.pop(symbol, None)
-                
-                RECENTLY_CLOSED[symbol] = datetime.utcnow() # STEP 4: Add to cooldown
+                LOSS_STREAK["count"] += 1 # STEP 2: Increase streak
+                logger.warning(f"Loss streak increased to {LOSS_STREAK['count']}")
+                for d in [LAST_ALERT_STATE, TRADE_STATE, BREAKEVEN_DONE, LAST_TRAILING_SL, STATE_WEAKNESS_COUNT]: d.pop(symbol, None)
+                RECENTLY_CLOSED[symbol] = datetime.utcnow()
                 continue
 
             # =========================================
-            # TRAILING LOGIC (STRONG/WEAKENING)
+            # DEFENSIVE EXITS (COUNT AS STREAK INCREMENT)
             # =========================================
+            sos_exit = (price_drop_pct > 2 and volume_spike)
+            dead_exit = (trade_age_hours > 24 and current_price < float(entry_price) * 1.005)
+            panic_exit = (MARKET_PANIC["active"] and current_price < ema20)
+            
+            # TRADE STATE & DECAY logic
             price_strength = (current_price > ema20)
-            momentum_strength = (rsi > 55)
-
-            if current_price <= (float(stop_loss) * 1.01): current_state = "DANGER"
-            elif current_price < ema20 or rsi < 48: current_state = "WEAKENING"
-            elif price_strength and momentum_strength and current_price > float(target1): current_state = "STRONG"
-            elif price_strength and momentum_strength: current_state = "HEALTHY"
-            else: current_state = "NEUTRAL"
-
+            current_state = "STRONG" if (price_strength and rsi > 55 and current_price > float(target1)) else "WEAKENING" if (current_price < ema20 or rsi < 48) else "HEALTHY"
             TRADE_STATE[symbol] = current_state
+            
+            if current_state == "WEAKENING":
+                STATE_WEAKNESS_COUNT[symbol] = STATE_WEAKNESS_COUNT.get(symbol, 0) + 1
+            else:
+                STATE_WEAKNESS_COUNT[symbol] = 0
+            
+            quality_decay_exit = (STATE_WEAKNESS_COUNT.get(symbol, 0) >= 3)
 
-            if current_state in ["STRONG", "WEAKENING"]:
-                multiplier = 0.992 if current_state == "STRONG" else 0.996
-                new_sl = round(max(float(stop_loss), current_price * multiplier), 2)
-                previous_sl = LAST_TRAILING_SL.get(symbol)
+            if sos_exit or dead_exit or panic_exit or quality_decay_exit:
+                result_str = "SOS_EXIT" if sos_exit else "DEAD_EXIT" if dead_exit else "MARKET_PANIC_EXIT" if panic_exit else "QUALITY_DECAY_EXIT"
+                send_trade_update(symbol, f"🛡 Defensive Exit: {result_str}\nStock: {symbol}\nCMP: ₹{round(current_price, 2)}")
+                save_trade_analytics(symbol=symbol, result=result_str, entry_price=entry_price, exit_price=current_price, stop_loss=stop_loss, target1=target1, target2=target2, rr=rr, score=score, regime=setup_type, state=result_str)
+                close_trade(symbol, result_str, current_price)
+                
+                LOSS_STREAK["count"] += 1 # STEP 4: Defensive exits count towards streak
+                for d in [LAST_ALERT_STATE, TRADE_STATE, BREAKEVEN_DONE, LAST_TRAILING_SL, STATE_WEAKNESS_COUNT]: d.pop(symbol, None)
+                RECENTLY_CLOSED[symbol] = datetime.utcnow()
+                continue
 
-                if new_sl > float(stop_loss) and new_sl != previous_sl:
-                    update_stop_loss(symbol, new_sl)
-                    LAST_TRAILING_SL[symbol] = new_sl
+            # =========================================
+            # TRAILING SL
+            # =========================================
+            if current_price >= float(target1) and not BREAKEVEN_DONE.get(symbol):
+                update_stop_loss(symbol, round(float(entry_price), 2))
+                BREAKEVEN_DONE[symbol] = True
 
         except Exception as e:
             logger.error(f"Trade monitor error for {symbol}: {e}")
@@ -174,6 +169,21 @@ def run_scanner():
     if SCAN_LOCK["running"] or not is_market_hours(): return
     SCAN_LOCK["running"] = True
     try:
+        # STEP 6: Conditional Streak Reset
+        market_trend = get_nifty_trend()
+        if market_trend == "BULLISH":
+            if LOSS_STREAK["count"] > 0:
+                logger.info("Market turned Bullish. Resetting Loss Streak.")
+                LOSS_STREAK["count"] = 0
+        
+        MARKET_PANIC["active"] = (market_trend == "BEARISH")
+
+        # STEP 5: Loss Streak Defense
+        if LOSS_STREAK["count"] >= 3:
+            logger.warning("LOSS STREAK DEFENSE ACTIVE - Pausing Scanning")
+            evaluate_open_positions() # Still manage existing trades
+            return
+
         expire_old_signals()
         evaluate_open_positions()
 
@@ -182,34 +192,28 @@ def run_scanner():
 
         batch_size = 10
         start = BATCH_INDEX[0]
-        end = start + batch_size
-        batch = WATCHLIST[start:end]
+        batch = WATCHLIST[start:start + batch_size]
 
         if not batch:
             BATCH_INDEX[0] = 0
             return
 
-        logger.info(f"Scanning batch: {batch}")
         for symbol in batch:
-            # STEP 5: Cooldown Check logic
             cooldown_time = RECENTLY_CLOSED.get(symbol)
-            if cooldown_time:
-                minutes_passed = (datetime.utcnow() - cooldown_time).total_seconds() / 60
-                if minutes_passed < 60:
-                    logger.info(f"{symbol} in cooldown period")
-                    continue
+            if cooldown_time and (datetime.utcnow() - cooldown_time).total_seconds() / 60 < 60:
+                continue
 
             try:
                 if is_signal_active(symbol): continue
                 df = get_dhan_data(symbol)
-                if df is None: continue
-                result = analyze_setup(df, symbol)
-                if result:
-                    save_signal(result)
-                    send_alert(symbol=result['symbol'], action="BUY", entry=result['entry'], sl=result['sl'], target1=result['target1'], target2=result['target2'], confidence=result['score'], reason=result['reasons'], quantity=result.get('quantity'))
+                if df is not None:
+                    result = analyze_setup(df, symbol)
+                    if result:
+                        save_signal(result)
+                        send_alert(symbol=result['symbol'], action="BUY", entry=result['entry'], sl=result['sl'], target1=result['target1'], target2=result['target2'], confidence=result['score'], reason=result['reasons'], quantity=result.get('quantity'))
             except Exception as e:
                 logger.error(f"Scanner error for {symbol}: {e}")
 
-        BATCH_INDEX[0] = end
+        BATCH_INDEX[0] = start + batch_size
     finally:
         SCAN_LOCK["running"] = False
