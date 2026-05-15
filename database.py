@@ -1,7 +1,7 @@
 import pg8000
 import os
 import logging
-from datetime import datetime  # <--- Ye line add kar di hai
+from datetime import datetime
 
 logger = logging.getLogger(__name__)
 
@@ -35,7 +35,6 @@ def create_tables():
         return
     cursor = conn.cursor()
 
-    # Historical signals
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS signals (
             id SERIAL PRIMARY KEY,
@@ -50,7 +49,6 @@ def create_tables():
         );
     """)
 
-    # Trade log
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS trade_log (
             id SERIAL PRIMARY KEY,
@@ -62,7 +60,6 @@ def create_tables():
         );
     """)
 
-    # Active lifecycle trades (Added cooldown_until column)
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS active_signals (
             id SERIAL PRIMARY KEY,
@@ -83,11 +80,10 @@ def create_tables():
             bought BOOLEAN DEFAULT FALSE,
             sold BOOLEAN DEFAULT FALSE,
             notes TEXT,
-            cooldown_until TIMESTAMP  -- Added for discipline filter
+            cooldown_until TIMESTAMP
         );
     """)
 
-    # Analytics memory (Added sector column)
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS trade_analytics (
             id SERIAL PRIMARY KEY,
@@ -106,7 +102,8 @@ def create_tables():
             holding_minutes INTEGER,
             confidence INTEGER,
             notes TEXT,
-            sector TEXT,  -- Added for sector memory
+            sector TEXT,
+            final_state TEXT,
             created_at TIMESTAMP DEFAULT NOW()
         );
     """)
@@ -273,3 +270,60 @@ def update_stop_loss(symbol, new_sl):
         logger.info(f"SL updated for {symbol}: {new_sl}")
     except Exception as e:
         logger.error(f"SL update error: {e}")
+
+def save_trade_analytics(
+    symbol,
+    result,
+    entry_price,
+    exit_price,
+    stop_loss,
+    target1,
+    target2,
+    rr,
+    score,
+    regime,
+    state
+):
+    conn = get_connection()
+    if not conn:
+        return
+    try:
+        cursor = conn.cursor()
+        cursor.execute("""
+            INSERT INTO trade_analytics (
+                symbol,
+                result,
+                entry_price,
+                exit_price,
+                stop_loss,
+                target1,
+                target2,
+                rr,
+                score,
+                market_regime,
+                final_state,
+                created_at
+            )
+            VALUES (
+                %s, %s, %s, %s, %s,
+                %s, %s, %s, %s, %s,
+                %s, NOW()
+            )
+        """, (
+            symbol,
+            result,
+            entry_price,
+            exit_price,
+            stop_loss,
+            target1,
+            target2,
+            rr,
+            score,
+            regime,
+            state
+        ))
+        conn.commit()
+        cursor.close()
+        conn.close()
+    except Exception as e:
+        logger.error(f"Trade analytics save error: {e}")
