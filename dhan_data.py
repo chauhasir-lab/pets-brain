@@ -61,19 +61,77 @@ def get_dhan_data(symbol):
             to_date=today
         )
 
-        candles = data.get("data")
-        if not candles:
-            logger.warning(f"No candle data for {symbol}")
+        # Log raw response structure for debugging
+        logger.info(f"Dhan raw response keys for {symbol}: {list(data.keys()) if isinstance(data, dict) else type(data)}")
+
+        # Handle different response formats
+        if isinstance(data, dict):
+            # Try 'data' key first
+            candles = data.get("data")
+
+            if candles is None:
+                logger.warning(f"No 'data' key for {symbol}. Keys: {list(data.keys())}")
+                return None
+
+            # If candles is a list of dicts
+            if isinstance(candles, list) and len(candles) > 0:
+                df = pd.DataFrame(candles)
+                # Rename columns if needed
+                col_map = {}
+                for col in df.columns:
+                    cl = col.lower()
+                    if 'open' in cl:
+                        col_map[col] = 'open'
+                    elif 'high' in cl:
+                        col_map[col] = 'high'
+                    elif 'low' in cl:
+                        col_map[col] = 'low'
+                    elif 'close' in cl:
+                        col_map[col] = 'close'
+                    elif 'volume' in cl:
+                        col_map[col] = 'volume'
+                df.rename(columns=col_map, inplace=True)
+
+            # If candles is a dict with OHLCV lists
+            elif isinstance(candles, dict):
+                # Find correct keys
+                keys = list(candles.keys())
+                open_key = next((k for k in keys if 'open' in k.lower()), None)
+                high_key = next((k for k in keys if 'high' in k.lower()), None)
+                low_key = next((k for k in keys if 'low' in k.lower()), None)
+                close_key = next((k for k in keys if 'close' in k.lower()), None)
+                vol_key = next((k for k in keys if 'volume' in k.lower()), None)
+
+                if not all([open_key, high_key, low_key, close_key, vol_key]):
+                    logger.warning(f"Missing OHLCV keys for {symbol}: {keys}")
+                    return None
+
+                df = pd.DataFrame({
+                    "open": candles[open_key],
+                    "high": candles[high_key],
+                    "low": candles[low_key],
+                    "close": candles[close_key],
+                    "volume": candles[vol_key]
+                })
+            else:
+                logger.warning(f"Unexpected candles format for {symbol}: {type(candles)}")
+                return None
+
+        elif isinstance(data, pd.DataFrame):
+            df = data
+        else:
+            logger.warning(f"Unexpected response type for {symbol}: {type(data)}")
             return None
 
-        df = pd.DataFrame({
-            "open": candles["open"],
-            "high": candles["high"],
-            "low": candles["low"],
-            "close": candles["close"],
-            "volume": candles["volume"]
-        })
+        # Ensure required columns exist
+        required = ['open', 'high', 'low', 'close', 'volume']
+        for col in required:
+            if col not in df.columns:
+                logger.warning(f"Missing column '{col}' for {symbol}. Columns: {list(df.columns)}")
+                return None
 
+        df = df[required].copy()
+        df = df.apply(pd.to_numeric, errors='coerce')
         df.dropna(inplace=True)
 
         if len(df) < 20:
