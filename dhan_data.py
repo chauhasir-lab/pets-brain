@@ -39,53 +39,115 @@ TICKERS = {
 
 
 def get_dhan_data(symbol):
+
     try:
 
         ticker = TICKERS.get(symbol)
 
         if not ticker:
-            logger.warning(f"No Yahoo ticker found for {symbol}")
+
+            logger.warning(
+                f"No Yahoo ticker found for {symbol}"
+            )
+
             return None
 
+        # Download data
         df = yf.download(
             ticker,
             period="5d",
             interval="15m",
             progress=False,
-            auto_adjust=False
+            auto_adjust=False,
+            multi_level_index=False
         )
 
-        if df.empty:
-            logger.warning(f"No Yahoo data for {symbol}")
+        # Empty check
+        if df is None or df.empty:
+
+            logger.warning(
+                f"No Yahoo data for {symbol}"
+            )
+
             return None
 
-        # Standardize column names
-        df = df.rename(columns={
-            "Open": "open",
-            "High": "high",
-            "Low": "low",
-            "Close": "close",
-            "Volume": "volume"
-        })
+        # Flatten + lowercase columns safely
+        df.columns = [
+            str(col).lower().strip()
+            for col in df.columns
+        ]
 
-        # Keep only needed columns
-        df = df[["open", "high", "low", "close", "volume"]]
+        # Required columns validation
+        required_cols = [
+            "open",
+            "high",
+            "low",
+            "close",
+            "volume"
+        ]
 
-        # Remove NaN
+        missing = [
+            col for col in required_cols
+            if col not in df.columns
+        ]
+
+        if missing:
+
+            logger.error(
+                f"Missing columns for {symbol}: {missing}"
+            )
+
+            logger.error(
+                f"Available columns: {df.columns.tolist()}"
+            )
+
+            return None
+
+        # Keep only required columns
+        df = df[
+            [
+                "open",
+                "high",
+                "low",
+                "close",
+                "volume"
+            ]
+        ].copy()
+
+        # Force numeric conversion
+        for col in required_cols:
+
+            df[col] = pd.to_numeric(
+                df[col],
+                errors="coerce"
+            )
+
+        # Remove NaN rows
         df.dropna(inplace=True)
 
-        # Convert all to float
+        # Float conversion
         df = df.astype(float)
 
-        # Minimum candles validation
+        # Minimum candle validation
         if len(df) < 20:
-            logger.warning(f"Not enough candles for {symbol}")
+
+            logger.warning(
+                f"Not enough candles for {symbol}: {len(df)}"
+            )
+
             return None
 
-        logger.info(f"Yahoo data fetched: {symbol} — {len(df)} candles")
+        logger.info(
+            f"Yahoo data fetched: "
+            f"{symbol} — {len(df)} candles"
+        )
 
         return df
 
     except Exception as e:
-        logger.error(f"Yahoo fetch error for {symbol}: {e}")
+
+        logger.error(
+            f"Yahoo fetch error for {symbol}: {e}"
+        )
+
         return None
