@@ -25,7 +25,8 @@ def handle_command(command):
         get_trade_performance_summary, 
         execute_query,
         get_recent_trade_failures,
-        mark_trade_as_bought
+        mark_trade_as_bought,
+        get_total_pnl
     )
     from scanner import (
         run_scanner, LAST_SCAN_TIME, SYSTEM_STATS, 
@@ -72,6 +73,17 @@ def handle_command(command):
         except Exception as e:
             send_message(f"❌ *Error:* `{str(e)}`")
 
+    elif base == "/pnl":
+        try:
+            pnl = get_total_pnl()
+            msg = (
+                f"💰 *PETS TOTAL PNL*\n\n"
+                f"Net Points: `{pnl}`"
+            )
+            send_message(msg)
+        except Exception as e:
+            send_message(f"❌ *Error calculating PNL:* `{str(e)}`")
+
     elif base == "/failures":
         rows = get_recent_trade_failures()
         if not rows:
@@ -110,7 +122,7 @@ def handle_command(command):
         send_message("✅ *Scan complete.*")
 
     elif base == "/help":
-        send_message("`/health`, `/diagnostics`, `/status`, `/scan`, `/performance`, `/failures`, `/buy SYMBOL`, `/signals`")
+        send_message("`/health`, `/diagnostics`, `/status`, `/scan`, `/performance`, `/failures`, `/buy SYMBOL`, `/pnl`, `/signals`")
 
 def start_bot_listener():
     logger.info("Bot Listener Started.")
