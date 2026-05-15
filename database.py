@@ -141,6 +141,20 @@ def get_trade_performance_summary():
         "win_rate": round((wins / total) * 100, 2)
     }
 
+def get_recent_trade_failures(limit=10):
+    query = """
+        SELECT 
+            symbol, result, rr, score, market_regime, final_state, created_at
+        FROM trade_analytics
+        WHERE result IN (
+            'SL_HIT', 'SOS_EXIT', 'DEAD_EXIT', 
+            'QUALITY_DECAY_EXIT', 'CONFIDENCE_EXIT', 'MARKET_PANIC_EXIT'
+        )
+        ORDER BY created_at DESC
+        LIMIT %s
+    """
+    return execute_query(query, (limit,), fetchall=True)
+
 def save_trade_analytics(symbol, result, entry_price, exit_price, stop_loss, target1, target2, rr, score, regime, state):
     query = """
         INSERT INTO trade_analytics (
@@ -166,7 +180,6 @@ def close_trade(symbol, result, exit_price=None):
         return
 
     (entry_price, stop_loss, target1, target2, quantity, rr, score, signal_time, setup_type) = trade
-    holding_minutes = int((datetime.utcnow() - signal_time).total_seconds() / 60)
     pnl = round((float(exit_price or 0) - float(entry_price)) * int(quantity), 2) if exit_price else 0
 
     save_trade_analytics(
