@@ -121,6 +121,11 @@ def main():
     )
     bot_thread.start()
 
+    # Temporary diagnostics lines added for thread verification
+    logger.info("Bot thread started successfully.")
+    time.sleep(2)
+    logger.info(f"Bot thread alive: {bot_thread.is_alive()}")
+
     # --- SCHEDULING LOGIC ---
 
     # Har 30 seconds mein scanner run hoga
