@@ -66,7 +66,7 @@ def run_scanner():
                 if signal:
                     WATCHLIST_SCORES[symbol] = min(WATCHLIST_SCORES.get(symbol, 0) + 2, 100)
 
-                    if WATCHLIST_SCORES[symbol] >= 4:
+                    if WATCHLIST_SCORES[symbol] >= 2:
                         query = """
                             INSERT INTO active_signals (
                                 symbol, setup_type, status, entry_price, stop_loss,
