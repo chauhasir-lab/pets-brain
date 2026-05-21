@@ -6,7 +6,6 @@ from time import time
 
 logger = logging.getLogger(__name__)
 
-# SECTOR MAP for Diversity Check
 SECTOR_MAP = {
     "RELIANCE": "ENERGY", "TCS": "IT", "HDFCBANK": "BANKING", "INFY": "IT",
     "ICICIBANK": "BANKING", "HINDUNILVR": "FMCG", "ITC": "FMCG", "SBIN": "BANKING",
@@ -21,27 +20,21 @@ def calculate_rsi(series, period=14):
     gain = (delta.where(delta > 0, 0)).rolling(window=period).mean()
     loss = (-delta.where(delta < 0, 0)).rolling(window=period).mean()
     rs = gain / loss
-    return 100 - (100 / (1  + rs)).iloc[-1]
+    return 100 - (100 / (1 + rs)).iloc[-1]
 
 def detect_market_regime(df):
-    """
-    Detects if the market is TRENDING, SIDEWAYS, or VOLATILE
-    """
-    # ATR for Volatility
     high_low = df['high'] - df['low']
     high_close = np.abs(df['high'] - df['close'].shift())
     low_close = np.abs(df['low'] - df['close'].shift())
     ranges = pd.concat([high_low, high_close, low_close], axis=1)
     true_range = ranges.max(axis=1)
     atr = true_range.rolling(14).mean().iloc[-1]
-    
-    # ADX-like logic for trend strength
+
     ema_20 = df['close'].ewm(span=20, adjust=False).mean()
     ema_50 = df['close'].ewm(span=50, adjust=False).mean()
-    
+
     current_atr_pct = (atr / df['close'].iloc[-1]) * 100
-    
-    # Logic
+
     if current_atr_pct > 2.5:
         return "HIGH_VOLATILITY", 2.0
     elif abs(ema_20.iloc[-1] - ema_50.iloc[-1]) / ema_50.iloc[-1] < 0.005:
@@ -51,105 +44,84 @@ def detect_market_regime(df):
     else:
         return "NORMAL", 1.5
 
-def get_nifty_trend():
-    # Placeholder for Nifty Trend Logic - in real use, fetch Nifty50 data
-    return "BULLISH"
-
-def is_market_hours():
-    now = datetime.now().time()
-    return time(9, 15) <= now <= time(15, 30)
-
 def analyze_setup(df, symbol):
     if df is None or len(df) < 50:
         return None
 
+    df = df.copy()
     df['ema_20'] = df['close'].ewm(span=20, adjust=False).mean()
     df['ema_50'] = df['close'].ewm(span=50, adjust=False).mean()
-    df['vwap'] = (df['volume'] * (df['high'] + df['low'] + df['close']) / 3).cumsum() / df['volume'].cumsum()
-    
+    df['vwap'] = (
+        df['volume'] * (df['high'] + df['low'] + df['close']) / 3
+    ).cumsum() / df['volume'].cumsum()
+
     latest = df.iloc[-1]
-    prev = df.iloc[-2]
-    
+
     score = 0
     reasons = []
 
-    # Detect Market Regime
     regime, atr_multiplier = detect_market_regime(df)
 
-    # =========================================
-    # REGIME ADAPTIVE SCORING
-    # =========================================
+    # Regime scoring
     regime_score_bonus = {
         "TRENDING": 15,
-        "HIGH_VOLATILITY": -10,
-        "SIDEWAYS": -15,
-        "NORMAL": 5
+        "NORMAL": 5,
+        "HIGH_VOLATILITY": -5,
+        "SIDEWAYS": -10
     }
-    
     score += regime_score_bonus.get(regime, 0)
-    
-    # Adaptive regime confidence boost
-    regime_confidence = {
-        "TRENDING": 0.65,
-        "NORMAL": 0.55,
-        "HIGH_VOLATILITY": 0.45,
-        "SIDEWAYS": 0.35
-    }.get(regime, 0.5)
+    reasons.append(f"Regime:{regime}")
 
-    if regime_confidence >= 0.65:
-        score += 10
-    elif regime_confidence < 0.45:
-        score -= 10
-
-    reasons.append(f"Regime {regime}")
-
-    # --- TECHNICAL SCORING ---
-    # EMA Cross/Alignment
+    # EMA alignment
     if latest['ema_20'] > latest['ema_50']:
         score += 20
-        reasons.append("EMA Alignment")
-    
-    # RSI Logic
-    rsi_val = calculate_rsi(df['close'])
-    if 50 < rsi_val < 70:
-        score += 15
-        reasons.append(f"RSI Bullish ({round(rsi_val, 1)})")
-    
-    # Volume Pump
-    avg_volume = df['volume'].rolling(window=20).mean().iloc[-1]
-    if latest['volume'] > avg_volume * 1.5:
-        score += 20
-        reasons.append("Volume Surge")
+        reasons.append("EMA OK")
 
-    # --- RISK CALCULATIONS ---
+    # RSI
+    rsi_val = calculate_rsi(df['close'])
+    if 45 < rsi_val < 75:
+        score += 15
+        reasons.append(f"RSI:{round(rsi_val, 1)}")
+
+    # Volume
+    avg_volume = df['volume'].rolling(window=20).mean().iloc[-1]
+    if latest['volume'] > avg_volume * 1.2:
+        score += 20
+        reasons.append("Vol Surge")
+
+    # VWAP
+    if latest['close'] > latest['vwap']:
+        score += 10
+        reasons.append("Above VWAP")
+
+    # Risk calculations
+    atr = (df['high'] - df['low']).rolling(14).mean().iloc[-1]
     entry_price = float(latest['close'])
-    stop_loss = entry_price - (atr_multiplier * (df['high'] - df['low']).rolling(14).mean().iloc[-1])
+    stop_loss = entry_price - (atr_multiplier * atr)
     target1 = entry_price + (entry_price - stop_loss) * 1.5
     target2 = entry_price + (entry_price - stop_loss) * 3.0
-    
-    rr = (target1 - entry_price) / (entry_price - stop_loss) if (entry_price - stop_loss) != 0 else 0
 
-    # =========================================
-    # IMPROVED ENTRY FILTERS (REGIME BASED)
-    # =========================================
+    risk = entry_price - stop_loss
+    rr = (target1 - entry_price) / risk if risk > 0 else 0
+
+    # Minimum score per regime
     minimum_score = {
-        "TRENDING": 60,
-        "NORMAL": 65,
-        "HIGH_VOLATILITY": 75,
-        "SIDEWAYS": 80
-    }.get(regime, 65)
+        "TRENDING": 55,
+        "NORMAL": 58,
+        "HIGH_VOLATILITY": 65,
+        "SIDEWAYS": 70
+    }.get(regime, 58)
 
-    if (
-        latest['volume'] < avg_volume
-        or latest['close'] < latest['vwap']
-        or latest['ema_20'] < latest['ema_50']
-        or rr < 1.8
-        or rsi_val > 78
-        or score < minimum_score
-    ):
+    # Hard filters — ye nahi hatane
+    if latest['ema_20'] < latest['ema_50']:
+        return None
+    if rsi_val > 78:
+        return None
+    if rr < 1.5:
+        return None
+    if score < minimum_score:
         return None
 
-    # Quantity calculation based on ₹200 risk per trade
     risk_per_share = entry_price - stop_loss
     quantity = int(200 / risk_per_share) if risk_per_share > 0 else 1
 
